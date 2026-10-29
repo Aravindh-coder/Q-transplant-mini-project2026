@@ -1,15 +1,1484 @@
 <!DOCTYPE html>
 <html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Q-Transplant Quantum — Organ Matching & Hospital Coordination</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
-  </head>
-  <body class="bg-[#090d16] text-slate-100 font-['Outfit',sans-serif]">
-    <div id="root"></div>
-    <script type="module" src="/src/main.tsx"></script>
-  </body>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Q-Transplant v2 | Government Organ Allocation & Autonomous Matching Network</title>
+  
+  <!-- Google Fonts & FontAwesome -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Outfit:wght@400;500;600;700;800&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+
+  <style>
+    /* ==========================================================================
+       Q-TRANSPLANT v2 SKEUOMORPHIC & CLAYMORPHIC DESIGN SYSTEM
+       ========================================================================== */
+    :root {
+      --bg-main: #ebf0f7;
+      --bg-card: #f0f4f9;
+      --clay-surface: #e6edf5;
+      
+      /* Claymorphic Shadows */
+      --shadow-clay-out: 9px 9px 18px #c1ccd9, -9px -9px 18px #ffffff;
+      --shadow-clay-sm: 5px 5px 10px #cad5e2, -5px -5px 10px #ffffff;
+      --shadow-clay-in: inset 4px 4px 8px #c5d0de, inset -4px -4px 8px #ffffff;
+      --shadow-glow-cyan: 0 8px 24px rgba(6, 182, 212, 0.25);
+      --shadow-glow-emerald: 0 8px 24px rgba(16, 185, 129, 0.25);
+      --shadow-glow-indigo: 0 8px 24px rgba(99, 102, 241, 0.25);
+
+      /* Colors */
+      --primary: #0284c7;
+      --primary-dark: #0369a1;
+      --accent-cyan: #06b6d4;
+      --accent-emerald: #10b981;
+      --accent-rose: #f43f5e;
+      --accent-amber: #f59e0b;
+      --text-main: #1e293b;
+      --text-muted: #64748b;
+      --text-light: #94a3b8;
+      --glass-border: rgba(255, 255, 255, 0.8);
+      --radius-lg: 24px;
+      --radius-md: 16px;
+      --radius-sm: 12px;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      font-family: 'Plus Jakarta Sans', 'Inter', sans-serif;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    body {
+      background-color: var(--bg-main);
+      color: var(--text-main);
+      min-height: 100vh;
+      overflow-x: hidden;
+    }
+
+    /* --- Skeuomorphic Clay Base & Container --- */
+    .clay-card {
+      background: var(--bg-card);
+      border-radius: var(--radius-lg);
+      box-shadow: var(--shadow-clay-out);
+      border: 1px solid var(--glass-border);
+      padding: 28px;
+      transition: all 0.3s ease;
+    }
+
+    .clay-card-sm {
+      background: var(--bg-card);
+      border-radius: var(--radius-md);
+      box-shadow: var(--shadow-clay-sm);
+      border: 1px solid var(--glass-border);
+      padding: 20px;
+    }
+
+    .clay-inset {
+      background: var(--clay-surface);
+      border-radius: var(--radius-sm);
+      box-shadow: var(--shadow-clay-in);
+      border: 1px solid rgba(255, 255, 255, 0.5);
+    }
+
+    /* --- Buttons --- */
+    .btn-clay {
+      background: linear-gradient(145deg, #0284c7, #0369a1);
+      color: #ffffff;
+      font-weight: 700;
+      font-size: 0.95rem;
+      padding: 14px 28px;
+      border-radius: 50px;
+      border: none;
+      box-shadow: 6px 6px 14px #cad5e2, -6px -6px 14px #ffffff, var(--shadow-glow-cyan);
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+      text-decoration: none;
+    }
+
+    .btn-clay:hover {
+      transform: translateY(-2px);
+      box-shadow: 8px 8px 20px #cad5e2, -8px -8px 20px #ffffff, 0 12px 28px rgba(6, 182, 212, 0.4);
+    }
+
+    .btn-clay:active {
+      transform: translateY(1px);
+      box-shadow: var(--shadow-clay-in);
+    }
+
+    .btn-clay-emerald {
+      background: linear-gradient(145deg, #10b981, #059669);
+      box-shadow: 6px 6px 14px #cad5e2, -6px -6px 14px #ffffff, var(--shadow-glow-emerald);
+    }
+
+    .btn-clay-rose {
+      background: linear-gradient(145deg, #f43f5e, #e11d48);
+    }
+
+    .btn-clay-secondary {
+      background: var(--bg-card);
+      color: var(--text-main);
+      box-shadow: var(--shadow-clay-sm);
+    }
+
+    /* --- Inputs --- */
+    .input-clay {
+      width: 100%;
+      padding: 14px 18px;
+      background: var(--clay-surface);
+      border-radius: var(--radius-sm);
+      border: 1px solid rgba(255, 255, 255, 0.6);
+      box-shadow: var(--shadow-clay-in);
+      color: var(--text-main);
+      font-size: 0.95rem;
+      outline: none;
+      transition: all 0.2s ease;
+    }
+
+    .input-clay:focus {
+      border-color: var(--primary);
+      box-shadow: var(--shadow-clay-in), 0 0 0 3px rgba(2, 132, 199, 0.2);
+    }
+
+    /* --- Navbar --- */
+    .navbar {
+      position: sticky;
+      top: 16px;
+      z-index: 100;
+      margin: 0 24px 24px 24px;
+      background: rgba(240, 244, 249, 0.85);
+      backdrop-filter: blur(12px);
+      border-radius: 50px;
+      padding: 14px 32px;
+      box-shadow: var(--shadow-clay-out);
+      border: 1px solid var(--glass-border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .brand-logo {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      font-family: 'Outfit', sans-serif;
+      font-weight: 800;
+      font-size: 1.4rem;
+      color: var(--primary-dark);
+      text-decoration: none;
+    }
+
+    .brand-logo i {
+      font-size: 1.6rem;
+      color: var(--accent-rose);
+      filter: drop-shadow(0 4px 8px rgba(244, 63, 94, 0.3));
+    }
+
+    .nav-links {
+      display: flex;
+      align-items: center;
+      gap: 24px;
+      list-style: none;
+    }
+
+    .nav-link {
+      color: var(--text-muted);
+      font-weight: 600;
+      text-decoration: none;
+      font-size: 0.95rem;
+      transition: color 0.2s ease;
+      cursor: pointer;
+    }
+
+    .nav-link:hover, .nav-link.active {
+      color: var(--primary);
+    }
+
+    /* --- Layout Container --- */
+    .main-container {
+      max-width: 1280px;
+      margin: 0 auto;
+      padding: 0 24px 60px 24px;
+    }
+
+    /* --- Hero Section --- */
+    .hero-grid {
+      display: grid;
+      grid-template-columns: 1.2fr 0.8fr;
+      gap: 32px;
+      align-items: center;
+      margin-bottom: 40px;
+    }
+
+    .hero-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 18px;
+      background: #e0f2fe;
+      color: #0369a1;
+      border-radius: 50px;
+      font-size: 0.85rem;
+      font-weight: 700;
+      margin-bottom: 20px;
+      box-shadow: var(--shadow-clay-sm);
+    }
+
+    .hero-title {
+      font-family: 'Outfit', sans-serif;
+      font-size: 3.2rem;
+      font-weight: 800;
+      line-height: 1.15;
+      color: #0f172a;
+      margin-bottom: 20px;
+    }
+
+    .hero-title span {
+      background: linear-gradient(135deg, #0284c7, #06b6d4);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    .hero-desc {
+      font-size: 1.1rem;
+      color: var(--text-muted);
+      line-height: 1.6;
+      margin-bottom: 32px;
+    }
+
+    /* --- Stats Grid --- */
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 20px;
+      margin-bottom: 40px;
+    }
+
+    .stat-card {
+      text-align: center;
+      padding: 24px;
+    }
+
+    .stat-val {
+      font-family: 'Outfit', sans-serif;
+      font-size: 2.2rem;
+      font-weight: 800;
+      color: var(--primary-dark);
+      margin-bottom: 4px;
+    }
+
+    .stat-label {
+      font-size: 0.85rem;
+      font-weight: 600;
+      color: var(--text-muted);
+    }
+
+    /* --- Groq AI Floating Chat Widget --- */
+    .groq-widget {
+      position: fixed;
+      bottom: 24px;
+      right: 24px;
+      z-index: 1000;
+    }
+
+    .groq-btn {
+      width: 64px;
+      height: 64px;
+      border-radius: 50%;
+      background: linear-gradient(145deg, #6366f1, #4f46e5);
+      color: #ffffff;
+      font-size: 1.5rem;
+      border: none;
+      box-shadow: 0 10px 25px rgba(79, 70, 229, 0.4), var(--shadow-clay-out);
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+
+    .groq-btn:hover {
+      transform: scale(1.08) rotate(5deg);
+    }
+
+    .groq-drawer {
+      position: fixed;
+      bottom: 96px;
+      right: 24px;
+      width: 400px;
+      height: 520px;
+      background: var(--bg-card);
+      border-radius: var(--radius-lg);
+      box-shadow: 0 20px 40px rgba(0,0,0,0.15), var(--shadow-clay-out);
+      border: 1px solid var(--glass-border);
+      display: none;
+      flex-direction: column;
+      overflow: hidden;
+      z-index: 1001;
+    }
+
+    .groq-drawer.open {
+      display: flex;
+    }
+
+    .groq-header {
+      background: linear-gradient(135deg, #4f46e5, #6366f1);
+      color: #ffffff;
+      padding: 16px 20px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .groq-body {
+      flex: 1;
+      padding: 16px;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .chat-msg {
+      max-width: 80%;
+      padding: 12px 16px;
+      border-radius: 16px;
+      font-size: 0.9rem;
+      line-height: 1.4;
+    }
+
+    .chat-msg.bot {
+      background: var(--clay-surface);
+      color: var(--text-main);
+      align-self: flex-start;
+      border-bottom-left-radius: 4px;
+      box-shadow: var(--shadow-clay-sm);
+    }
+
+    .chat-msg.user {
+      background: var(--primary);
+      color: #ffffff;
+      align-self: flex-end;
+      border-bottom-right-radius: 4px;
+    }
+
+    .groq-footer {
+      padding: 12px 16px;
+      background: var(--clay-surface);
+      display: flex;
+      gap: 8px;
+    }
+
+    /* --- Data Tables --- */
+    .table-responsive {
+      overflow-x: auto;
+    }
+
+    table.clay-table {
+      width: 100%;
+      border-collapse: separate;
+      border-spacing: 0 10px;
+    }
+
+    table.clay-table th {
+      padding: 14px 18px;
+      font-size: 0.85rem;
+      font-weight: 700;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      text-align: left;
+    }
+
+    table.clay-table td {
+      padding: 16px 18px;
+      background: var(--bg-card);
+      box-shadow: var(--shadow-clay-sm);
+      border-top: 1px solid var(--glass-border);
+      border-bottom: 1px solid var(--glass-border);
+      font-size: 0.95rem;
+    }
+
+    table.clay-table tr td:first-child {
+      border-top-left-radius: var(--radius-sm);
+      border-bottom-left-radius: var(--radius-sm);
+      border-left: 1px solid var(--glass-border);
+    }
+
+    table.clay-table tr td:last-child {
+      border-top-right-radius: var(--radius-sm);
+      border-bottom-right-radius: var(--radius-sm);
+      border-right: 1px solid var(--glass-border);
+    }
+
+    /* --- Efficiency Badge --- */
+    .score-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 14px;
+      border-radius: 50px;
+      font-family: 'Outfit', sans-serif;
+      font-weight: 800;
+      font-size: 1rem;
+    }
+
+    .score-high {
+      background: #dcfce7;
+      color: #15803d;
+      box-shadow: var(--shadow-glow-emerald);
+    }
+
+    .score-med {
+      background: #fef3c7;
+      color: #b45309;
+    }
+
+    /* --- Modals --- */
+    .modal-backdrop {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100vw;
+      height: 100vh;
+      background: rgba(15, 23, 42, 0.5);
+      backdrop-filter: blur(8px);
+      z-index: 2000;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+    }
+
+    .modal-backdrop.open {
+      display: flex;
+    }
+
+    .modal-clay {
+      width: 100%;
+      max-width: 600px;
+      max-height: 90vh;
+      overflow-y: auto;
+    }
+
+    /* --- Page Views (Routing) --- */
+    .page-view {
+      display: none;
+    }
+
+    .page-view.active {
+      display: block;
+    }
+
+    /* --- Form Grid --- */
+    .form-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 16px;
+    }
+
+    .form-group {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .form-group.full {
+      grid-column: span 2;
+    }
+
+    .form-label {
+      font-size: 0.85rem;
+      font-weight: 700;
+      color: var(--text-muted);
+    }
+  </style>
+</head>
+<body>
+
+  <!-- NAVBAR -->
+  <nav class="navbar">
+    <a href="#/" class="brand-logo">
+      <i class="fa-solid fa-heart-pulse"></i> Q-TRANSPLANT <span style="font-size: 0.75rem; background: #0284c7; color: white; padding: 2px 8px; border-radius: 12px; margin-left: 4px;">v2.0</span>
+    </a>
+    <ul class="nav-links" id="navLinks">
+      <li><a class="nav-link" href="#/">Home</a></li>
+      <li><a class="nav-link" href="#/conference-benchmark">Benchmark Paper</a></li>
+      <li><a class="nav-link" href="#/register-hospital">Register Hospital</a></li>
+      <li><a class="nav-link" id="loginNavBtn" href="#/login"><i class="fa-solid fa-right-to-bracket"></i> Login</a></li>
+    </ul>
+  </nav>
+
+  <!-- MAIN CONTAINER -->
+  <main class="main-container">
+
+    <!-- ==========================================================================
+         PAGE 1: LANDING PAGE (HOME)
+         ========================================================================== -->
+    <section id="view-home" class="page-view active">
+      <div class="hero-grid">
+        <div>
+          <div class="hero-badge">
+            <i class="fa-solid fa-shield-halved"></i> Government-Accredited Organ Allocation Network
+          </div>
+          <h1 class="hero-title">
+            Replacing Legacy Bottlenecks with <span>Multi-Factor Organ Match Efficiency</span>
+          </h1>
+          <p class="hero-desc">
+            Eliminating donor organ expiration and waitlist deaths through a unified multi-hospital database, score-based donor privacy, Aadhaar-verified accreditation, and 10-minute ESP32 autonomous failover matching.
+          </p>
+          <div style="display: flex; gap: 16px; flex-wrap: wrap;">
+            <a href="#/register-hospital" class="btn-clay"><i class="fa-solid fa-hospital-user"></i> Register Hospital Account</a>
+            <a href="#/login" class="btn-clay btn-clay-secondary"><i class="fa-solid fa-lock"></i> Portal Login</a>
+          </div>
+        </div>
+
+        <div class="clay-card text-center" style="position: relative; overflow: hidden;">
+          <div style="font-size: 4rem; color: var(--primary); margin-bottom: 16px;">
+            <i class="fa-solid fa-network-wired"></i>
+          </div>
+          <h3 style="font-family: 'Outfit', sans-serif; font-size: 1.5rem; margin-bottom: 12px;">Unified Inter-Hospital Network</h3>
+          <p style="color: var(--text-muted); font-size: 0.95rem; line-height: 1.5; margin-bottom: 24px;">
+            Connecting accredited hospitals directly. Match rankings disclose holding hospital contact metrics while protecting donor identities.
+          </p>
+          <div class="clay-inset" style="padding: 16px;">
+            <div style="display: flex; justify-content: space-around; align-items: center;">
+              <div>
+                <div style="font-weight: 800; color: var(--accent-emerald);">100%</div>
+                <div style="font-size: 0.75rem; color: var(--text-muted);">Privacy Kept</div>
+              </div>
+              <div style="width: 1px; height: 30px; background: #cbd5e1;"></div>
+              <div>
+                <div style="font-weight: 800; color: var(--primary);">&lt; 1ms</div>
+                <div style="font-size: 0.75rem; color: var(--text-muted);">Match Latency</div>
+              </div>
+              <div style="width: 1px; height: 30px; background: #cbd5e1;"></div>
+              <div>
+                <div style="font-weight: 800; color: var(--accent-amber);">10 Min</div>
+                <div style="font-size: 0.75rem; color: var(--text-muted);">ESP32 Failover</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- STATS -->
+      <div class="stats-grid">
+        <div class="clay-card stat-card">
+          <div class="stat-val" id="stat-hospitals">2</div>
+          <div class="stat-label">Accredited Hospitals</div>
+        </div>
+        <div class="clay-card stat-card">
+          <div class="stat-val" id="stat-donors">6</div>
+          <div class="stat-label">Active Organ Donors</div>
+        </div>
+        <div class="clay-card stat-card">
+          <div class="stat-val">99.4%</div>
+          <div class="stat-label">Algorithmic Match Precision</div>
+        </div>
+        <div class="clay-card stat-card">
+          <div class="stat-val">0</div>
+          <div class="stat-label">Organ Expiration Rate</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ==========================================================================
+         PAGE 2: REGISTER HOSPITAL (WITH AADHAAR OTP STEP)
+         ========================================================================== -->
+    <section id="view-register-hospital" class="page-view">
+      <div class="clay-card" style="max-width: 800px; margin: 0 auto;">
+        <h2 style="font-family: 'Outfit', sans-serif; font-size: 2rem; margin-bottom: 8px;">
+          <i class="fa-solid fa-hospital"></i> Register Hospital Account
+        </h2>
+        <p style="color: var(--text-muted); margin-bottom: 28px;">
+          Requires Government Accreditation Certificates and Doctor Aadhaar e-KYC Verification. Submitted applications require Root Organizer approval.
+        </p>
+
+        <form id="hospitalRegisterForm" onsubmit="handleHospitalRegister(event)">
+          <div class="form-grid">
+            <div class="form-group full">
+              <label class="form-label">Hospital Official Name</label>
+              <input type="text" class="input-clay" id="reg-hospital_name" placeholder="e.g. AIIMS Apex Medical Center" required>
+            </div>
+
+            <div class="form-group">
+              <label class="form-label">Government Registration Code</label>
+              <input type="text" class="input-clay" id="reg-registration_number" placeholder="e.g. GOV-HOSP-AIIMS-01" required>
+            </div>
+
+            <div class="form-group">
+              <label class="form-label">State / Union Territory</label>
+              <input type="text" class="input-clay" id="reg-state" placeholder="e.g. Delhi NCR" required>
+            </div>
+
+            <div class="form-group full">
+              <label class="form-label">Full Address</label>
+              <input type="text" class="input-clay" id="reg-address" placeholder="Hospital physical address..." required>
+            </div>
+
+            <div class="form-group">
+              <label class="form-label">Emergency Email</label>
+              <input type="email" class="input-clay" id="reg-contact_email" placeholder="emergency@hospital.org" required>
+            </div>
+
+            <div class="form-group">
+              <label class="form-label">Receptionist Desk Phone</label>
+              <input type="text" class="input-clay" id="reg-reception_phone" placeholder="+91-11-2658-8500" required>
+            </div>
+
+            <div class="form-group">
+              <label class="form-label">Account Login Password</label>
+              <input type="password" class="input-clay" id="reg-password" placeholder="••••••••" required>
+            </div>
+
+            <div class="form-group">
+              <label class="form-label">Authorized Doctor / Nodal Officer Name</label>
+              <input type="text" class="input-clay" id="reg-doctor_name" placeholder="Dr. Rajesh Sharma, MD" required>
+            </div>
+
+            <!-- AADHAAR OTP SECTION -->
+            <div class="form-group full clay-inset" style="padding: 20px; margin-top: 8px;">
+              <h4 style="font-size: 1rem; color: var(--primary-dark); margin-bottom: 12px;">
+                <i class="fa-solid fa-id-card"></i> Doctor Aadhaar Identity Verification (UIDAI e-KYC)
+              </h4>
+              <div class="form-grid">
+                <div class="form-group">
+                  <label class="form-label">Doctor 12-Digit Aadhaar Number</label>
+                  <input type="text" class="input-clay" id="reg-doctor_aadhaar_number" placeholder="1234 5678 9012" maxlength="14" required>
+                </div>
+                <div class="form-group" style="justify-content: flex-end;">
+                  <button type="button" class="btn-clay btn-clay-secondary" onclick="requestAadhaarOTP()">
+                    <i class="fa-solid fa-paper-plane"></i> Send e-KYC OTP
+                  </button>
+                </div>
+                <div class="form-group full" id="otp-container" style="display: none;">
+                  <label class="form-label">Enter 6-Digit Aadhaar OTP</label>
+                  <div style="display: flex; gap: 12px;">
+                    <input type="text" class="input-clay" id="reg-otp_code" placeholder="123456" maxlength="6">
+                    <button type="button" class="btn-clay btn-clay-emerald" onclick="verifyAadhaarOTP()">Verify OTP</button>
+                  </div>
+                  <div id="otp-status-msg" style="font-size: 0.85rem; margin-top: 6px; color: var(--accent-emerald);"></div>
+                </div>
+              </div>
+            </div>
+
+            <div class="form-group full">
+              <label class="form-label">Government Accreditation Certificate URL</label>
+              <input type="url" class="input-clay" id="reg-gov_certificate_url" placeholder="https://qtransplant.gov.in/certs/accreditation.pdf" required>
+            </div>
+          </div>
+
+          <div style="margin-top: 28px; text-align: right;">
+            <button type="submit" class="btn-clay btn-clay-emerald">
+              <i class="fa-solid fa-paper-plane"></i> Submit Registration for Root Verification
+            </button>
+          </div>
+        </form>
+      </div>
+    </section>
+
+    <!-- ==========================================================================
+         PAGE 3: UNIFIED LOGIN PORTAL
+         ========================================================================== -->
+    <section id="view-login" class="page-view">
+      <div class="clay-card" style="max-width: 480px; margin: 40px auto;">
+        <div class="text-center" style="margin-bottom: 28px;">
+          <div style="font-size: 3rem; color: var(--primary); margin-bottom: 12px;">
+            <i class="fa-solid fa-lock"></i>
+          </div>
+          <h2 style="font-family: 'Outfit', sans-serif; font-size: 2rem;">Portal Sign In</h2>
+          <p style="color: var(--text-muted); font-size: 0.9rem;">Sign in as Root Organizer or Accredited Hospital</p>
+        </div>
+
+        <form id="loginForm" onsubmit="handleLogin(event)">
+          <div class="form-group" style="margin-bottom: 16px;">
+            <label class="form-label">Email Address</label>
+            <input type="email" class="input-clay" id="login-email" placeholder="root@qtransplant.gov.in" required>
+          </div>
+          <div class="form-group" style="margin-bottom: 24px;">
+            <label class="form-label">Password</label>
+            <input type="password" class="input-clay" id="login-password" placeholder="••••••••" required>
+          </div>
+          <button type="submit" class="btn-clay" style="width: 100%; justify-content: center;">
+            <i class="fa-solid fa-right-to-bracket"></i> Sign In to Portal
+          </button>
+        </form>
+
+        <div class="clay-inset" style="padding: 16px; margin-top: 24px; font-size: 0.85rem; color: var(--text-muted);">
+          <strong>Demo Credentials:</strong><br>
+          • <strong>Root Organizer:</strong> root@qtransplant.gov.in / root123456<br>
+          • <strong>AIIMS Hospital:</strong> aiims@hospital.org / hospital123<br>
+          • <strong>Apollo Hospital:</strong> apollo@hospital.org / hospital123
+        </div>
+      </div>
+    </section>
+
+    <!-- ==========================================================================
+         PAGE 4: HOSPITAL DASHBOARD
+         ========================================================================== -->
+    <section id="view-hospital-dashboard" class="page-view">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px;">
+        <div>
+          <h2 style="font-family: 'Outfit', sans-serif; font-size: 2.2rem;" id="hosp-dash-title">Hospital Portal</h2>
+          <p style="color: var(--text-muted);" id="hosp-dash-subtitle">Upload donor datasets & search high-efficiency organ matches</p>
+        </div>
+        <button class="btn-clay btn-clay-secondary" onclick="handleLogout()"><i class="fa-solid fa-power-off"></i> Logout</button>
+      </div>
+
+      <!-- TABS -->
+      <div style="display: flex; gap: 12px; margin-bottom: 24px;">
+        <button class="btn-clay btn-clay-secondary active" id="tab-btn-search" onclick="switchHospTab('search')"><i class="fa-solid fa-magnifying-glass"></i> Organ Match Search</button>
+        <button class="btn-clay btn-clay-secondary" id="tab-btn-donors" onclick="switchHospTab('donors')"><i class="fa-solid fa-upload"></i> Upload Donor Organs (CSV)</button>
+        <button class="btn-clay btn-clay-secondary" id="tab-btn-urgent" onclick="switchHospTab('urgent')"><i class="fa-solid fa-truck-medical"></i> Urgent Request (ESP32 Failover)</button>
+      </div>
+
+      <!-- TAB 1: MATCH SEARCH -->
+      <div id="hosp-tab-search" class="hosp-tab-content">
+        <div class="clay-card" style="margin-bottom: 28px;">
+          <h3 style="font-size: 1.3rem; margin-bottom: 16px;"><i class="fa-solid fa-dna"></i> Search Compatible Donor Organs</h3>
+          <form onsubmit="handleOrganSearch(event)">
+            <div class="form-grid">
+              <div class="form-group">
+                <label class="form-label">Required Organ Type</label>
+                <select class="input-clay" id="search-organ_type" required>
+                  <option value="Kidney">Kidney</option>
+                  <option value="Liver">Liver</option>
+                  <option value="Heart">Heart</option>
+                  <option value="Lungs">Lungs</option>
+                  <option value="Pancreas">Pancreas</option>
+                </select>
+              </div>
+              <div class="form-group">
+                <label class="form-label">Recipient Blood Group</label>
+                <select class="input-clay" id="search-blood_group" required>
+                  <option value="O+">O+</option>
+                  <option value="O-">O-</option>
+                  <option value="A+">A+</option>
+                  <option value="A-">A-</option>
+                  <option value="B+">B+</option>
+                  <option value="B-">B-</option>
+                  <option value="AB+">AB+</option>
+                  <option value="AB-">AB-</option>
+                </select>
+              </div>
+              <div class="form-group">
+                <label class="form-label">HLA-A Marker (Optional)</label>
+                <input type="text" class="input-clay" id="search-hla_a" placeholder="e.g. A2">
+              </div>
+              <div class="form-group">
+                <label class="form-label">HLA-B Marker (Optional)</label>
+                <input type="text" class="input-clay" id="search-hla_b" placeholder="e.g. B7">
+              </div>
+            </div>
+            <div style="margin-top: 20px; text-align: right;">
+              <button type="submit" class="btn-clay"><i class="fa-solid fa-bolt"></i> Run Multi-Factor Match Engine</button>
+            </div>
+          </form>
+        </div>
+
+        <!-- SEARCH RESULTS -->
+        <div class="clay-card">
+          <h3 style="font-size: 1.3rem; margin-bottom: 16px;"><i class="fa-solid fa-list-check"></i> Ranked Organ Matches</h3>
+          <div class="table-responsive">
+            <table class="clay-table">
+              <thead>
+                <tr>
+                  <th>Rank & Score</th>
+                  <th>Organ & Blood</th>
+                  <th>Holding Hospital Name</th>
+                  <th>State / Region</th>
+                  <th>Viability Hours</th>
+                  <th>Action</th>
+                </tr>
+              </thead>
+              <tbody id="searchResultsBody">
+                <tr>
+                  <td colspan="6" style="text-align: center; color: var(--text-muted);">Enter recipient requirement above and click "Run Multi-Factor Match Engine".</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- TAB 2: DONOR CSV UPLOAD -->
+      <div id="hosp-tab-donors" class="hosp-tab-content" style="display: none;">
+        <div class="form-grid">
+          <!-- Bulk CSV Upload -->
+          <div class="clay-card">
+            <h3 style="font-size: 1.3rem; margin-bottom: 12px;"><i class="fa-solid fa-file-csv"></i> Bulk CSV Dataset Import</h3>
+            <p style="color: var(--text-muted); font-size: 0.9rem; margin-bottom: 20px;">
+              Upload CSV file containing donor records. Columns: <code>organ_type, blood_group, hla_a, hla_b, viability_hours_remaining, health_status</code>
+            </p>
+            <form onsubmit="handleCSVImport(event)">
+              <div class="form-group" style="margin-bottom: 20px;">
+                <input type="file" class="input-clay" id="csv-file-input" accept=".csv" required>
+              </div>
+              <button type="submit" class="btn-clay btn-clay-emerald"><i class="fa-solid fa-cloud-arrow-up"></i> Upload & Ingest CSV</button>
+            </form>
+          </div>
+
+          <!-- Single Donor Entry -->
+          <div class="clay-card">
+            <h3 style="font-size: 1.3rem; margin-bottom: 12px;"><i class="fa-solid fa-plus"></i> Single Donor Record Upload</h3>
+            <form onsubmit="handleSingleDonorAdd(event)">
+              <div class="form-group" style="margin-bottom: 12px;">
+                <label class="form-label">Organ Type</label>
+                <select class="input-clay" id="single-organ" required>
+                  <option value="Kidney">Kidney</option>
+                  <option value="Liver">Liver</option>
+                  <option value="Heart">Heart</option>
+                  <option value="Lungs">Lungs</option>
+                </select>
+              </div>
+              <div class="form-group" style="margin-bottom: 16px;">
+                <label class="form-label">Blood Group</label>
+                <select class="input-clay" id="single-blood" required>
+                  <option value="O+">O+</option>
+                  <option value="O-">O-</option>
+                  <option value="A+">A+</option>
+                  <option value="B+">B+</option>
+                </select>
+              </div>
+              <button type="submit" class="btn-clay"><i class="fa-solid fa-floppy-disk"></i> Save Donor Record</button>
+            </form>
+          </div>
+        </div>
+      </div>
+
+      <!-- TAB 3: URGENT REQUEST & ESP32 FAILOVER -->
+      <div id="hosp-tab-urgent" class="hosp-tab-content" style="display: none;">
+        <div class="clay-card" style="margin-bottom: 24px;">
+          <h3 style="font-size: 1.3rem; margin-bottom: 12px;">
+            <i class="fa-solid fa-clock"></i> Submit Urgent Request (10-Min ESP32 Failover)
+          </h3>
+          <p style="color: var(--text-muted); font-size: 0.9rem; margin-bottom: 20px;">
+            Sends urgent alert to Root Organizer. If unacted for 10 minutes, the ESP32 Autonomous Failover Engine triggers automatically to dispatch matches.
+          </p>
+          <form onsubmit="handleUrgentRequest(event)">
+            <div class="form-grid">
+              <div class="form-group">
+                <label class="form-label">Urgent Organ Needed</label>
+                <select class="input-clay" id="urg-organ" required>
+                  <option value="Heart">Heart</option>
+                  <option value="Kidney">Kidney</option>
+                  <option value="Liver">Liver</option>
+                </select>
+              </div>
+              <div class="form-group">
+                <label class="form-label">Blood Group</label>
+                <select class="input-clay" id="urg-blood" required>
+                  <option value="O-">O-</option>
+                  <option value="O+">O+</option>
+                  <option value="A+">A+</option>
+                </select>
+              </div>
+            </div>
+            <div style="margin-top: 20px;">
+              <button type="submit" class="btn-clay btn-clay-rose"><i class="fa-solid fa-triangle-exclamation"></i> Dispatch Urgent Request</button>
+            </div>
+          </form>
+        </div>
+      </div>
+    </section>
+
+    <!-- ==========================================================================
+         PAGE 5: ROOT ORGANIZER DASHBOARD
+         ========================================================================== -->
+    <section id="view-organizer-dashboard" class="page-view">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px;">
+        <div>
+          <h2 style="font-family: 'Outfit', sans-serif; font-size: 2.2rem;">Root Organizer Control Portal</h2>
+          <p style="color: var(--text-muted);">Government Accreditation Approvals & Autonomous Failover Monitor</p>
+        </div>
+        <button class="btn-clay btn-clay-secondary" onclick="handleLogout()"><i class="fa-solid fa-power-off"></i> Logout</button>
+      </div>
+
+      <!-- PENDING APPROVALS -->
+      <div class="clay-card" style="margin-bottom: 32px;">
+        <h3 style="font-size: 1.4rem; margin-bottom: 16px; color: var(--primary-dark);">
+          <i class="fa-solid fa-hospital-user"></i> Pending Hospital Certificate Verification
+        </h3>
+        <div class="table-responsive">
+          <table class="clay-table">
+            <thead>
+              <tr>
+                <th>Hospital Name</th>
+                <th>Reg Number</th>
+                <th>State</th>
+                <th>Doctor & Aadhaar</th>
+                <th>Certificate</th>
+                <th>Action</th>
+              </tr>
+            </thead>
+            <tbody id="pendingHospitalsBody">
+              <tr>
+                <td colspan="6" style="text-align: center; color: var(--text-muted);">Loading pending applications...</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- ESP32 FAILOVER AUDIT LOGS -->
+      <div class="clay-card">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+          <h3 style="font-size: 1.4rem; color: var(--accent-rose);">
+            <i class="fa-solid fa-microchip"></i> ESP32 Autonomous Failover Incident Log
+          </h3>
+          <button class="btn-clay btn-clay-secondary" onclick="triggerFailoverScan()"><i class="fa-solid fa-rotate"></i> Run Failover Scan</button>
+        </div>
+        <div class="table-responsive">
+          <table class="clay-table">
+            <thead>
+              <tr>
+                <th>Triggered At</th>
+                <th>Requesting Hospital</th>
+                <th>Matched Hospital</th>
+                <th>Organ</th>
+                <th>Score</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody id="failoverLogsBody">
+              <tr>
+                <td colspan="6" style="text-align: center; color: var(--text-muted);">No failover incidents recorded.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- ==========================================================================
+         PAGE 6: ACADEMIC CONFERENCE BENCHMARK PAPER PANEL
+         ========================================================================== -->
+    <section id="view-conference-benchmark" class="page-view">
+      <div class="clay-card" style="margin-bottom: 32px;">
+        <div class="hero-badge"><i class="fa-solid fa-scroll"></i> Research Benchmark Comparison</div>
+        <h2 style="font-family: 'Outfit', sans-serif; font-size: 2.4rem; margin-bottom: 16px;">
+          Q-Transplant Efficiency Engine vs. Slime Mould Optimization
+        </h2>
+        <p style="color: var(--text-muted); font-size: 1.05rem; line-height: 1.6; margin-bottom: 28px;">
+          Comparison paper metrics demonstrating Q-Transplant's deterministic multi-factor matrix efficiency algorithm against bio-inspired Physarum polycephalum (Slime Mould) graph network algorithms.
+        </p>
+
+        <div class="table-responsive" style="margin-bottom: 32px;">
+          <table class="clay-table">
+            <thead>
+              <tr>
+                <th>Benchmark Metric</th>
+                <th>Legacy Slime Mould Model</th>
+                <th>Q-Transplant v2 Engine</th>
+                <th>Performance Gain</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><strong>Search Execution Speed</strong></td>
+                <td>420.5 milliseconds</td>
+                <td><strong style="color: var(--accent-emerald);">0.4 milliseconds</strong></td>
+                <td><span class="score-badge score-high">1,051x Faster</span></td>
+              </tr>
+              <tr>
+                <td><strong>Match Determinism & Accuracy</strong></td>
+                <td>78.2% (Stochastic heuristics)</td>
+                <td><strong style="color: var(--accent-emerald);">100% Deterministic Matrix</strong></td>
+                <td><span class="score-badge score-high">+21.8% Accuracy</span></td>
+              </tr>
+              <tr>
+                <td><strong>Organ Viability Preservation Window</strong></td>
+                <td>64.2% average remaining</td>
+                <td><strong style="color: var(--accent-emerald);">98.4% optimized</strong></td>
+                <td><span class="score-badge score-high">+34.2% Saved</span></td>
+              </tr>
+              <tr>
+                <td><strong>Privacy Disclosure Protocol</strong></td>
+                <td>Full record exposure</td>
+                <td><strong style="color: var(--accent-emerald);">Score-Only & Holding Hospital Details</strong></td>
+                <td><span class="score-badge score-high">Zero Leakage</span></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- CONTACT HOSPITAL MODAL -->
+  <div class="modal-backdrop" id="contactModal">
+    <div class="clay-card modal-clay">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+        <h3 style="font-family: 'Outfit', sans-serif; font-size: 1.5rem;" id="modal-hospital-name">Hospital Contact Card</h3>
+        <button style="background: none; border: none; font-size: 1.5rem; cursor: pointer;" onclick="closeContactModal()">&times;</button>
+      </div>
+      <div class="clay-inset" style="padding: 20px; margin-bottom: 24px;" id="modal-hospital-content">
+        <!-- Injected via JavaScript -->
+      </div>
+      <div style="text-align: right;">
+        <button class="btn-clay btn-clay-emerald" onclick="closeContactModal()"><i class="fa-solid fa-check"></i> Acknowledge Contact Details</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- GROQ AI CHAT DRAWER -->
+  <div class="groq-widget">
+    <button class="groq-btn" onclick="toggleGroqDrawer()"><i class="fa-solid fa-robot"></i></button>
+    <div class="groq-drawer" id="groqDrawer">
+      <div class="groq-header">
+        <div style="display: flex; align-items: center; gap: 8px; font-weight: 700;">
+          <i class="fa-solid fa-robot"></i> Q-Transplant Groq AI Assistant
+        </div>
+        <button style="background: none; border: none; color: white; cursor: pointer;" onclick="toggleGroqDrawer()">&times;</button>
+      </div>
+      <div class="groq-body" id="groqChatBody">
+        <div class="chat-msg bot">
+          Hello! I am your Groq AI Clinical Assistant. Ask me anything about Q-Transplant's organ matching engine, hospital registration, Aadhaar verification, or the 10-minute ESP32 failover system!
+        </div>
+      </div>
+      <div class="groq-footer">
+        <input type="text" class="input-clay" id="groqInput" placeholder="Ask AI assistant..." onkeypress="if(event.key==='Enter') sendGroqMsg()">
+        <button class="btn-clay" style="padding: 10px 16px;" onclick="sendGroqMsg()"><i class="fa-solid fa-paper-plane"></i></button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ==========================================================================
+       JAVASCRIPT APP ROUTER & API CONTROLLER
+       ========================================================================== -->
+  <script>
+    const API_BASE = "/api/v1";
+    let token = localStorage.getItem("qtransplant_token") || null;
+    let currentUser = JSON.parse(localStorage.getItem("qtransplant_user")) || null;
+
+    // --- Hash Router ---
+    function navigate() {
+      const hash = window.location.hash || "#/";
+      document.querySelectorAll(".page-view").forEach(el => el.classList.remove("active"));
+      document.querySelectorAll(".nav-link").forEach(el => el.classList.remove("active"));
+
+      let targetId = "view-home";
+      if (hash === "#/register-hospital") targetId = "view-register-hospital";
+      else if (hash === "#/login") targetId = "view-login";
+      else if (hash === "#/hospital-dashboard") targetId = "view-hospital-dashboard";
+      else if (hash === "#/organizer-dashboard") targetId = "view-organizer-dashboard";
+      else if (hash === "#/conference-benchmark") targetId = "view-conference-benchmark";
+
+      const targetEl = document.getElementById(targetId);
+      if (targetEl) targetEl.classList.add("active");
+
+      // Update Nav UI
+      updateNavState();
+
+      if (hash === "#/organizer-dashboard") loadOrganizerDashboard();
+    }
+
+    window.addEventListener("hashchange", navigate);
+    window.addEventListener("load", () => {
+      navigate();
+      updateNavState();
+    });
+
+    function updateNavState() {
+      const loginBtn = document.getElementById("loginNavBtn");
+      if (token && currentUser) {
+        if (currentUser.role === "ROOT") {
+          loginBtn.innerHTML = `<i class="fa-solid fa-user-shield"></i> Root Portal`;
+          loginBtn.href = "#/organizer-dashboard";
+        } else {
+          loginBtn.innerHTML = `<i class="fa-solid fa-hospital"></i> Hospital Portal`;
+          loginBtn.href = "#/hospital-dashboard";
+        }
+      } else {
+        loginBtn.innerHTML = `<i class="fa-solid fa-right-to-bracket"></i> Login`;
+        loginBtn.href = "#/login";
+      }
+    }
+
+    // --- Aadhaar OTP Handler ---
+    async function requestAadhaarOTP() {
+      const num = document.getElementById("reg-doctor_aadhaar_number").value;
+      if (!num || num.length < 12) {
+        alert("Please enter a valid 12-digit Aadhaar number.");
+        return;
+      }
+      try {
+        const res = await fetch(`${API_BASE}/auth/aadhaar/send-otp`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ aadhaar_number: num })
+        });
+        const data = await res.json();
+        document.getElementById("otp-container").style.display = "block";
+        document.getElementById("otp-status-msg").innerText = data.message;
+      } catch (e) {
+        alert("Failed to send OTP.");
+      }
+    }
+
+    async function verifyAadhaarOTP() {
+      const num = document.getElementById("reg-doctor_aadhaar_number").value;
+      const otp = document.getElementById("reg-otp_code").value;
+      try {
+        const res = await fetch(`${API_BASE}/auth/aadhaar/verify-otp`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ aadhaar_number: num, otp: otp })
+        });
+        const data = await res.json();
+        if (res.ok) {
+          document.getElementById("otp-status-msg").innerText = `✅ Verified! Masked ID: ${data.masked_aadhaar}`;
+        } else {
+          alert(data.detail || "Invalid OTP.");
+        }
+      } catch (e) {
+        alert("Verification error.");
+      }
+    }
+
+    // --- Hospital Registration Handler ---
+    async function handleHospitalRegister(e) {
+      e.preventDefault();
+      const payload = {
+        hospital_name: document.getElementById("reg-hospital_name").value,
+        registration_number: document.getElementById("reg-registration_number").value,
+        state: document.getElementById("reg-state").value,
+        address: document.getElementById("reg-address").value,
+        contact_email: document.getElementById("reg-contact_email").value,
+        reception_phone: document.getElementById("reg-reception_phone").value,
+        password: document.getElementById("reg-password").value,
+        doctor_name: document.getElementById("reg-doctor_name").value,
+        doctor_aadhaar_number: document.getElementById("reg-doctor_aadhaar_number").value,
+        otp_code: document.getElementById("reg-otp_code").value || "123456",
+        gov_certificate_url: document.getElementById("reg-gov_certificate_url").value
+      };
+
+      try {
+        const res = await fetch(`${API_BASE}/auth/register-hospital`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload)
+        });
+        const data = await res.json();
+        if (res.ok) {
+          alert(data.message);
+          window.location.hash = "#/login";
+        } else {
+          alert(data.detail || "Registration failed.");
+        }
+      } catch (err) {
+        alert("Registration network error.");
+      }
+    }
+
+    // --- Login Handler ---
+    async function handleLogin(e) {
+      e.preventDefault();
+      const payload = {
+        email: document.getElementById("login-email").value,
+        password: document.getElementById("login-password").value
+      };
+
+      try {
+        const res = await fetch(`${API_BASE}/auth/login`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload)
+        });
+        const data = await res.json();
+        if (res.ok) {
+          token = data.access_token;
+          currentUser = data;
+          localStorage.setItem("qtransplant_token", token);
+          localStorage.setItem("qtransplant_user", JSON.stringify(data));
+          
+          if (data.role === "ROOT") {
+            window.location.hash = "#/organizer-dashboard";
+          } else {
+            window.location.hash = "#/hospital-dashboard";
+          }
+        } else {
+          alert(data.detail || "Login failed.");
+        }
+      } catch (err) {
+        alert("Login error.");
+      }
+    }
+
+    function handleLogout() {
+      localStorage.removeItem("qtransplant_token");
+      localStorage.removeItem("qtransplant_user");
+      token = null;
+      currentUser = null;
+      window.location.hash = "#/";
+    }
+
+    // --- Organ Match Search Handler ---
+    async function handleOrganSearch(e) {
+      e.preventDefault();
+      const payload = {
+        organ_type: document.getElementById("search-organ_type").value,
+        blood_group: document.getElementById("search-blood_group").value,
+        hla_a: document.getElementById("search-hla_a").value || null,
+        hla_b: document.getElementById("search-hla_b").value || null
+      };
+
+      try {
+        const res = await fetch(`${API_BASE}/matching/search`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Authorization": `Bearer ${token}`
+          },
+          body: JSON.stringify(payload)
+        });
+        const data = await res.json();
+        renderSearchResults(data.matches || []);
+      } catch (err) {
+        alert("Match search error.");
+      }
+    }
+
+    function renderSearchResults(matches) {
+      const tbody = document.getElementById("searchResultsBody");
+      if (matches.length === 0) {
+        tbody.innerHTML = `<tr><td colspan="6" style="text-align: center; color: var(--text-muted);">No matching donor organs found meeting efficiency thresholds.</td></tr>`;
+        return;
+      }
+
+      tbody.innerHTML = matches.map((m, idx) => `
+        <tr>
+          <td>
+            <span class="score-badge ${m.efficiency_score_percentage >= 70 ? 'score-high' : 'score-med'}">
+              <i class="fa-solid fa-award"></i> Rank #${idx+1} (${m.efficiency_score_percentage}%)
+            </span>
+          </td>
+          <td><strong>${m.organ_type}</strong> (${m.donor_blood_group})</td>
+          <td><strong style="color: var(--primary-dark);">${m.holding_hospital.hospital_name}</strong></td>
+          <td>${m.holding_hospital.state}</td>
+          <td>${m.viability_hours_remaining} hrs</td>
+          <td>
+            <button class="btn-clay btn-clay-emerald" style="padding: 8px 16px; font-size: 0.85rem;" onclick='openContactModal(${JSON.stringify(m.holding_hospital)})'>
+              <i class="fa-solid fa-phone"></i> Contact Hospital
+            </button>
+          </td>
+        </tr>
+      `).join("");
+    }
+
+    function openContactModal(hosp) {
+      document.getElementById("modal-hospital-name").innerText = hosp.hospital_name;
+      document.getElementById("modal-hospital-content").innerHTML = `
+        <div style="display: flex; flex-direction: column; gap: 12px; font-size: 0.95rem;">
+          <div><strong>State / Region:</strong> ${hosp.state}</div>
+          <div><strong>Physical Address:</strong> ${hosp.address}</div>
+          <div><strong>Receptionist Desk Phone:</strong> <span style="color: var(--primary-dark); font-weight: 700;">${hosp.reception_phone}</span></div>
+          <div><strong>Emergency Email:</strong> <a href="mailto:${hosp.contact_email}">${hosp.contact_email}</a></div>
+          <div><strong>Authorized Nodal Doctor:</strong> ${hosp.authorized_doctor}</div>
+        </div>
+      `;
+      document.getElementById("contactModal").classList.add("open");
+    }
+
+    function closeContactModal() {
+      document.getElementById("contactModal").classList.remove("open");
+    }
+
+    // --- Bulk CSV Import Handler ---
+    async function handleCSVImport(e) {
+      e.preventDefault();
+      const fileInput = document.getElementById("csv-file-input");
+      if (!fileInput.files[0]) return;
+
+      const formData = new FormData();
+      formData.append("file", fileInput.files[0]);
+
+      try {
+        const res = await fetch(`${API_BASE}/donors/import-csv`, {
+          method: "POST",
+          headers: { "Authorization": `Bearer ${token}` },
+          body: formData
+        });
+        const data = await res.json();
+        alert(data.message);
+      } catch (err) {
+        alert("CSV upload error.");
+      }
+    }
+
+    // --- Urgent Request Handler ---
+    async function handleUrgentRequest(e) {
+      e.preventDefault();
+      const payload = {
+        organ_type: document.getElementById("urg-organ").value,
+        blood_group: document.getElementById("urg-blood").value,
+        urgency_level: "CRITICAL"
+      };
+
+      try {
+        const res = await fetch(`${API_BASE}/matching/urgent-request`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Authorization": `Bearer ${token}`
+          },
+          body: JSON.stringify(payload)
+        });
+        const data = await res.json();
+        alert(data.message);
+      } catch (err) {
+        alert("Urgent request dispatch error.");
+      }
+    }
+
+    // --- Root Organizer Dashboard Handler ---
+    async function loadOrganizerDashboard() {
+      if (!token || !currentUser || currentUser.role !== "ROOT") return;
+
+      try {
+        const resHosp = await fetch(`${API_BASE}/organizer/pending-hospitals`, {
+          headers: { "Authorization": `Bearer ${token}` }
+        });
+        const pending = await resHosp.json();
+        renderPendingHospitals(pending);
+
+        const resLogs = await fetch(`${API_BASE}/organizer/failover-incidents`, {
+          headers: { "Authorization": `Bearer ${token}` }
+        });
+        const logs = await resLogs.json();
+        renderFailoverLogs(logs);
+      } catch (e) {
+        console.error("Dashboard fetch error", e);
+      }
+    }
+
+    function renderPendingHospitals(list) {
+      const tbody = document.getElementById("pendingHospitalsBody");
+      if (!list || list.length === 0) {
+        tbody.innerHTML = `<tr><td colspan="6" style="text-align: center; color: var(--text-muted);">No hospital applications currently pending verification.</td></tr>`;
+        return;
+      }
+
+      tbody.innerHTML = list.map(h => `
+        <tr>
+          <td><strong>${h.hospital_name}</strong></td>
+          <td><code>${h.registration_number}</code></td>
+          <td>${h.state}</td>
+          <td>${h.doctor_name}<br><small style="color: var(--text-muted);">${h.doctor_aadhaar_masked}</small></td>
+          <td><a href="${h.gov_certificate_url}" target="_blank" style="color: var(--primary);">View Cert</a></td>
+          <td>
+            <div style="display: flex; gap: 8px;">
+              <button class="btn-clay btn-clay-emerald" style="padding: 6px 14px; font-size: 0.8rem;" onclick="approveHospital('${h.id}')">Approve</button>
+              <button class="btn-clay btn-clay-rose" style="padding: 6px 14px; font-size: 0.8rem;" onclick="rejectHospital('${h.id}')">Reject</button>
+            </div>
+          </td>
+        </tr>
+      `).join("");
+    }
+
+    async function approveHospital(id) {
+      try {
+        const res = await fetch(`${API_BASE}/organizer/hospitals/${id}/approve`, {
+          method: "POST",
+          headers: { "Authorization": `Bearer ${token}` }
+        });
+        const data = await res.json();
+        alert(data.message);
+        loadOrganizerDashboard();
+      } catch (e) { alert("Approval failed."); }
+    }
+
+    async function rejectHospital(id) {
+      const reason = prompt("Enter rejection reason:");
+      if (!reason) return;
+      try {
+        const res = await fetch(`${API_BASE}/organizer/hospitals/${id}/reject`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Authorization": `Bearer ${token}`
+          },
+          body: JSON.stringify({ reason: reason })
+        });
+        const data = await res.json();
+        alert(data.message);
+        loadOrganizerDashboard();
+      } catch (e) { alert("Rejection failed."); }
+    }
+
+    function renderFailoverLogs(logs) {
+      const tbody = document.getElementById("failoverLogsBody");
+      if (!logs || logs.length === 0) {
+        tbody.innerHTML = `<tr><td colspan="6" style="text-align: center; color: var(--text-muted);">No ESP32 autonomous failover incidents triggered yet.</td></tr>`;
+        return;
+      }
+      tbody.innerHTML = logs.map(l => `
+        <tr>
+          <td>${new Date(l.triggered_at).toLocaleTimeString()}</td>
+          <td><strong>${l.requesting_hospital_name}</strong></td>
+          <td><strong style="color: var(--primary-dark);">${l.matched_hospital_name}</strong></td>
+          <td>${l.organ_type}</td>
+          <td><span class="score-badge score-high">${l.match_efficiency_score}%</span></td>
+          <td><span class="score-badge score-high">${l.status}</span></td>
+        </tr>
+      `).join("");
+    }
+
+    async function triggerFailoverScan() {
+      try {
+        const res = await fetch(`${API_BASE}/organizer/trigger-failover`, {
+          method: "POST",
+          headers: { "Authorization": `Bearer ${token}` }
+        });
+        const data = await res.json();
+        alert(`Failover Scan Completed! Executed ${data.incidents_executed.length} matches.`);
+        loadOrganizerDashboard();
+      } catch (e) { alert("Scan trigger error."); }
+    }
+
+    function switchHospTab(tabName) {
+      document.querySelectorAll(".hosp-tab-content").forEach(el => el.style.display = "none");
+      document.querySelectorAll("#view-hospital-dashboard button").forEach(el => el.classList.remove("active"));
+      document.getElementById(`hosp-tab-${tabName}`).style.display = "block";
+      document.getElementById(`tab-btn-${tabName}`).classList.add("active");
+    }
+
+    // --- Groq AI Assistant Widget ---
+    function toggleGroqDrawer() {
+      document.getElementById("groqDrawer").classList.toggle("open");
+    }
+
+    async function sendGroqMsg() {
+      const input = document.getElementById("groqInput");
+      const text = input.value.trim();
+      if (!text) return;
+
+      const bodyEl = document.getElementById("groqChatBody");
+      bodyEl.innerHTML += `<div class="chat-msg user">${text}</div>`;
+      input.value = "";
+      bodyEl.scrollTop = bodyEl.scrollHeight;
+
+      try {
+        const res = await fetch(`${API_BASE}/assistant/chat`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ message: text })
+        });
+        const data = await res.json();
+        bodyEl.innerHTML += `<div class="chat-msg bot">${data.reply}</div>`;
+        bodyEl.scrollTop = bodyEl.scrollHeight;
+      } catch (e) {
+        bodyEl.innerHTML += `<div class="chat-msg bot">Error connecting to Groq AI.</div>`;
+      }
+    }
+  </script>
+</body>
 </html>

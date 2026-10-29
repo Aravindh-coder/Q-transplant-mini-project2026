@@ -1,159 +1,335 @@
-from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field
+"""Q-Transplant v4 — Organ Matching Router.
+
+All match searches now use:
+  - Real-time viability decay (from uploaded_at timestamp)
+  - GIS-adjusted viability (Haversine distance between hospitals)
+  - Full 6-locus weighted HLA scoring
+  - PRA crossmatch risk flagging
+  - Organ allocation locking (confirm allocation)
+"""
+from datetime import datetime, timedelta, timezone
 from typing import Optional
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
+
 from app.database import get_db
-from app.models import User, Patient, DonorProfile, MatchRequest, MatchResult, HospitalProfile, DoctorProfile
+from app.models import User, HospitalProfile, Donor, OrganRequest, AuditLog
 from app.security import require_role
-from app.services.audit import log_action
-from app.services.matching_engine import run_match
-from app.services.clinical_safety import decision_support_payload
-from app.services.ai_assistant import risk_flags, summarize_match, clinical_review
-from app.services.match_workflow import workflow_plan
-from app.services.notifications import notify, notify_organizer
-from app.services.quantum.search import classical_search, quantum_inspired_search_traced
-from app.utils import to_dict, to_dict_list
+from app.services.efficiency_engine import calculate_match_efficiency
+from app.services.gis_engine import compute_gis_adjusted_viability
 
-router = APIRouter(prefix="/api/v1/matching", tags=["matching"])
-
-@router.get("/workflow")
-def get_workflow_plan():
-    """Public-shape description of the matching pipeline stages, for API
-    documentation and frontend transparency (section 21/37 of the spec:
-    every result should be explainable, including how it was produced)."""
-    return workflow_plan()
-
-def _donor_to_dict(d):
-    return {"id":d.id,"blood_group":d.blood_group,"organs_available":d.organs_available or [],"availability_status":d.availability_status,"hla_a":d.hla_a,"hla_b":d.hla_b,"hla_c":d.hla_c,"hla_dr":d.hla_dr,"hla_dq":d.hla_dq}
-
-def _patient_to_dict(p):
-    return {"id":p.id,"blood_group":p.blood_group,"required_organ":p.required_organ,"urgency":p.urgency,"waiting_since":p.waiting_since,"eligible":True,"hla_a":p.hla_a,"hla_b":p.hla_b,"hla_c":p.hla_c,"hla_dr":p.hla_dr,"hla_dq":p.hla_dq}
-
-def _attach_associated_hospitals(matches: list[dict], donors: list, db: Session) -> None:
-    """Attaches the registering hospital's contact info to each match result
-    in place of any donor identity -- the requesting hospital coordinates
-    with that hospital, never with the donor directly. A donor with no
-    hospital_id (self-registered, not sourced through a hospital) gets
-    associated_hospital: None; nothing about the donor's own identity is
-    ever added here."""
-    hospital_by_donor = {d.id: d.hospital_id for d in donors}
-    hospital_ids = {hid for hid in hospital_by_donor.values() if hid}
-    hospitals = {h.id: h for h in db.query(HospitalProfile).filter(HospitalProfile.id.in_(hospital_ids)).all()} if hospital_ids else {}
-    for m in matches:
-        hid = hospital_by_donor.get(m.get("donor_id"))
-        h = hospitals.get(hid)
-        m["associated_hospital"] = ({
-            "hospital_id": h.id, "hospital_name": h.hospital_name,
-            "phone": h.phone, "address": h.address, "location": h.location,
-            "authorized_contact": h.authorized_contact,
-        } if h else None)
+router = APIRouter(prefix="/api/v1/matching", tags=["Organ Matching"])
 
 
-class RecipientSearchIn(BaseModel):
+class OrganMatchSearchIn(BaseModel):
+    organ_type: str
     blood_group: str
-    required_organ: str
-    urgency: str = "MEDIUM"
+    rh_factor: Optional[str] = "+"
     hla_a: Optional[str] = None
     hla_b: Optional[str] = None
     hla_c: Optional[str] = None
     hla_dr: Optional[str] = None
     hla_dq: Optional[str] = None
-    ai_review_top_n: int = Field(3, ge=0, le=5, description="How many of the top matches get an AI clinical review (0 to skip entirely).")
+    pra_percentage: Optional[float] = 0.0
+    urgency_level: Optional[str] = "HIGH"
+    min_efficiency_percentage: Optional[float] = 30.0
 
 
-@router.post("/search")
-def search_by_criteria(body: RecipientSearchIn, user: User = Depends(require_role("doctor", "hospital", "organizer")), db: Session = Depends(get_db)):
-    """Ad-hoc recipient search -- enter criteria directly, no saved Patient
-    record required. Runs the same deterministic engine as /run/{patient_id},
-    plus a traced quantum-inspired search (for the 'watch it search' demo
-    view) and an AI clinical review on the top candidates. The deterministic
-    ranking is what's authoritative; the traced search and AI review are
-    both purely illustrative/assistive layers on top of it."""
-    ad_hoc_patient = {
-        "id": None, "blood_group": body.blood_group.upper(), "required_organ": body.required_organ.lower(),
-        "urgency": body.urgency.upper(), "waiting_since": None, "eligible": True,
-        "hla_a": body.hla_a, "hla_b": body.hla_b, "hla_c": body.hla_c, "hla_dr": body.hla_dr, "hla_dq": body.hla_dq,
+class UrgentRequestIn(BaseModel):
+    organ_type: str
+    blood_group: str
+    rh_factor: Optional[str] = "+"
+    hla_a: Optional[str] = None
+    hla_b: Optional[str] = None
+    hla_c: Optional[str] = None
+    hla_dr: Optional[str] = None
+    hla_dq: Optional[str] = None
+    urgency_level: Optional[str] = "CRITICAL"
+    patient_name: Optional[str] = "Anonymized Recipient"
+
+
+@router.post("/search", summary="Run clinical multi-factor organ match search")
+def search_organ_matches(
+    body: OrganMatchSearchIn,
+    user: User = Depends(require_role("HOSPITAL", "ROOT")),
+    db: Session = Depends(get_db),
+):
+    """Runs the full clinical match engine across all unallocated donor organs.
+    - Real-time viability decay from upload timestamp
+    - GIS Haversine transport time subtracted from viability
+    - 6-locus weighted HLA scoring (DR=12%, A=8%, B=8%, DQ=6%, C=4%)
+    - PRA crossmatch risk flagging
+    Only holding hospital contact info is exposed (donor identity hidden).
+    """
+    requesting_hospital = None
+    if user.role == "HOSPITAL":
+        requesting_hospital = db.query(HospitalProfile).filter(
+            HospitalProfile.user_id == user.id
+        ).first()
+        if not requesting_hospital or requesting_hospital.status != "APPROVED":
+            raise HTTPException(403, "Hospital must be APPROVED to run match searches.")
+
+    recipient_spec = {
+        "organ_type": body.organ_type,
+        "blood_group": body.blood_group,
+        "hla_a": body.hla_a, "hla_b": body.hla_b,
+        "hla_c": body.hla_c, "hla_dr": body.hla_dr, "hla_dq": body.hla_dq,
     }
-    donors = db.query(DonorProfile).filter(DonorProfile.availability_status == "active", DonorProfile.donation_status == "ACTIVE", DonorProfile.verification_status == "verified").all()
-    donor_dicts = [_donor_to_dict(d) for d in donors]
 
-    result = run_match(donor_dicts, ad_hoc_patient, top_n=len(donor_dicts) or 1)
-    full_ranked = result["matches"]  # every candidate that passed blood+organ hard gates, fully scored
-    result["matches"] = full_ranked[:10]
-    result["matches"] = [{**m, **decision_support_payload(m)} for m in result["matches"]]
-    _attach_associated_hospitals(result["matches"], donors, db)
-    for i, m in enumerate(result["matches"]):
-        m["ai_assist"] = {"risk_flags": risk_flags(m), "summary": summarize_match(m)}
-        if i < body.ai_review_top_n:
-            m["ai_assist"]["clinical_review"] = clinical_review(m)
+    # Fetch only unallocated donors
+    donors = db.query(Donor).filter(Donor.is_allocated == False).all()
+    now = datetime.now(timezone.utc)
+    results = []
 
-    # Traced quantum-inspired search over the SAME already-scored pool that
-    # produced the deterministic ranking above -- for visualizing the
-    # search process itself, not for deciding anything. Uses the FULL
-    # ranked pool (every candidate that passed the hard gates), not just
-    # the top 10 shown above, so the trace honestly reflects the real
-    # search space instead of silently treating everyone outside the
-    # display list as maximally incompatible.
-    search_trace = None
-    if len(donor_dicts) >= 3 and full_ranked:
-        score_lookup = {m["donor_id"]: m["score"] for m in full_ranked}
-        scoreable = [d for d in donor_dicts if d["id"] in score_lookup]
-        classical = classical_search(scoreable, lambda d: score_lookup[d["id"]])
-        traced = quantum_inspired_search_traced(scoreable, lambda d: score_lookup[d["id"]], lambda d: d["id"])
-        search_trace = {
-            "classical_evaluations": classical["evaluations"],
-            "quantum_inspired_evaluations": traced["evaluations"],
-            "iterations": traced["iterations"],
-            "candidates_searched": traced["candidates_searched"],
-            "steps": traced["trace"],
-            "found_top_candidate": traced["best"]["id"] if traced["best"] else None,
-            "matches_deterministic_top": (traced["best"]["id"] if traced["best"] else None) == (full_ranked[0]["donor_id"] if full_ranked else None),
+    for donor in donors:
+        # ── Real-time viability decay ──────────────────────────────────────
+        uploaded = donor.uploaded_at or donor.created_at
+        if uploaded and uploaded.tzinfo is None:
+            uploaded = uploaded.replace(tzinfo=timezone.utc)
+        elapsed_hrs = (now - uploaded).total_seconds() / 3600.0 if uploaded else 0
+        actual_viability = max(0.0, donor.viability_hours_remaining - elapsed_hrs)
+        if actual_viability <= 0:
+            continue
+
+        # ── GIS distance calculation ───────────────────────────────────────
+        holding_hospital = db.query(HospitalProfile).filter(
+            HospitalProfile.id == donor.hospital_id
+        ).first()
+        if not holding_hospital:
+            continue
+
+        gis = compute_gis_adjusted_viability(
+            stored_viability_hours=actual_viability,
+            donor_lat=holding_hospital.latitude,
+            donor_lon=holding_hospital.longitude,
+            recipient_lat=requesting_hospital.latitude if requesting_hospital else None,
+            recipient_lon=requesting_hospital.longitude if requesting_hospital else None,
+            organ_type=donor.organ_type,
+            donor_state=holding_hospital.state,
+            recipient_state=requesting_hospital.state if requesting_hospital else "",
+        )
+        if not gis["is_viable"]:
+            continue
+
+        donor_spec = {
+            "organ_type": donor.organ_type,
+            "blood_group": donor.blood_group,
+            "hla_a": donor.hla_a, "hla_b": donor.hla_b,
+            "hla_c": donor.hla_c, "hla_dr": donor.hla_dr, "hla_dq": donor.hla_dq,
+            "viability_hours_remaining": actual_viability,
+            "health_status": donor.health_status,
         }
 
-    log_action(db, "MATCH_SEARCH_AD_HOC", user_id=user.id, meta={"required_organ": body.required_organ, "candidates_evaluated": result["candidates_evaluated"], "matches_found": len(result["matches"])})
-    return {"recipient_criteria": ad_hoc_patient, "candidates_evaluated": result["candidates_evaluated"],
-            "matches": result["matches"], "quantum_comparison": result["quantum_comparison"], "search_trace": search_trace}
+        metrics = calculate_match_efficiency(
+            donor=donor_spec,
+            recipient=recipient_spec,
+            gis_data=gis,
+            urgency_level=body.urgency_level,
+            pra_percentage=body.pra_percentage or 0.0,
+        )
 
+        score = metrics.get("efficiency_score", 0.0)
+        if score < body.min_efficiency_percentage or not metrics.get("is_compatible"):
+            continue
 
-@router.post("/run/{patient_id}")
-def run_match_for_patient(patient_id: str, user: User = Depends(require_role("doctor","hospital")), db: Session = Depends(get_db)):
-    patient=db.query(Patient).filter(Patient.id==patient_id).first()
-    if not patient: raise HTTPException(404,"Patient not found.")
-    if user.role=="doctor":
-        doctor=db.query(DoctorProfile).filter(DoctorProfile.user_id==user.id).first()
-        if not doctor or doctor.hospital_id!=patient.hospital_id: raise HTTPException(403,"You are not authorized for this patient.")
-    else:
-        hospital=db.query(HospitalProfile).filter(HospitalProfile.user_id==user.id).first()
-        if not hospital or hospital.id!=patient.hospital_id: raise HTTPException(403,"You are not authorized for this patient.")
-    donors=db.query(DonorProfile).filter(DonorProfile.availability_status=="active",DonorProfile.donation_status=="ACTIVE",DonorProfile.verification_status=="verified").all()
-    result=run_match([_donor_to_dict(d) for d in donors],_patient_to_dict(patient))
-    result["matches"]=[{**m,**decision_support_payload(m)} for m in result["matches"]]
-    _attach_associated_hospitals(result["matches"], donors, db)
-    for m in result["matches"]:
-        # AI-assist layer: flags and phrasing only, never re-scores or
-        # re-ranks -- the deterministic engine above has already decided.
-        m["ai_assist"]={"risk_flags":risk_flags(m),"summary":summarize_match(m)}
-    req=MatchRequest(patient_id=patient.id,requested_by=user.id,organ=patient.required_organ,status="completed"); db.add(req); db.flush()
-    for m in result["matches"]:
-        db.add(MatchResult(match_request_id=req.id,donor_id=m["donor_id"],blood_compatible=m["blood_compatible"],hla_score=m["hla_score"],organ_compatible=m["organ_compatible"],urgency_at_match=m["urgency"],overall_score=m["score"],explanation=m,rank=m["rank"]))
-    notify(db,user,"Match analysis completed",f"{len(result['matches'])} compatible donor candidate(s) were ranked for patient {patient.id}.","normal",True)
+        results.append({
+            "donor_ref": f"DONOR-{donor.id[:8].upper()}",
+            "donor_id": donor.id,
+            "organ_type": donor.organ_type,
+            "donor_blood_group": donor.blood_group,
+            "efficiency_score_percentage": score,
+            "score_breakdown": {
+                "blood": metrics["blood_score"],
+                "hla": metrics["hla_score"],
+                "hla_pct": metrics["hla_percentage"],
+                "viability": metrics["viability_score"],
+                "urgency": metrics["urgency_score"],
+                "pra_penalty": metrics["pra_penalty"],
+            },
+            "gis_info": {
+                "distance_km": gis.get("distance_km"),
+                "transport_hours": gis.get("transport_hours"),
+                "actual_viability_stored_hrs": round(actual_viability, 1),
+                "adjusted_viability_hours": gis.get("adjusted_viability_hours"),
+                "gis_available": gis.get("gis_available"),
+            },
+            "pra_risk": metrics["pra_risk"],
+            "pra_flag": metrics["pra_flag"],
+            "pra_message": metrics["pra_message"],
+            "viability_hours_remaining": gis.get("adjusted_viability_hours", actual_viability),
+            "health_status": donor.health_status,
+            "holding_hospital": {
+                "hospital_id": holding_hospital.id,
+                "hospital_name": holding_hospital.hospital_name,
+                "registration_number": holding_hospital.registration_number,
+                "state": holding_hospital.state,
+                "address": holding_hospital.address,
+                "reception_phone": holding_hospital.reception_phone,
+                "contact_email": holding_hospital.contact_email,
+                "authorized_doctor": holding_hospital.doctor_name,
+            },
+        })
+
+    results.sort(key=lambda x: x["efficiency_score_percentage"], reverse=True)
+
+    # Audit ledger block
+    from app.audit_ledger import audit_ledger
+    audit_ledger.add_block(
+        action="MATCH_ENGINE_SEARCH_EXECUTED",
+        details={
+            "user_id": user.id, "user_role": user.role,
+            "organ_type": body.organ_type, "blood_group": body.blood_group,
+            "matches_found": len(results),
+            "top_score": results[0]["efficiency_score_percentage"] if results else 0,
+        },
+    )
+
+    audit = AuditLog(
+        user_id=user.id, action="MATCH_SEARCH_EXECUTED",
+        target=body.organ_type,
+        meta={"organ": body.organ_type, "matches_found": len(results)},
+    )
+    db.add(audit)
     db.commit()
-    notify_organizer("Q-Transplant — match found",f"A compatibility analysis found {len(result['matches'])} candidate(s) for patient {patient.id}.")
-    log_action(db,"MATCH_GENERATED",user_id=user.id,target=patient_id,meta={"candidates_evaluated":result["candidates_evaluated"],"matches_found":len(result["matches"])})
-    return {"match_request_id":req.id,**result}
 
-@router.get("/history/{patient_id}")
-def match_history(patient_id: str,user: User=Depends(require_role("doctor","hospital","organizer")),db:Session=Depends(get_db)):
-    patient=db.query(Patient).filter(Patient.id==patient_id).first()
-    if not patient: raise HTTPException(404,"Patient not found.")
-    if user.role=="doctor":
-        doctor=db.query(DoctorProfile).filter(DoctorProfile.user_id==user.id).first()
-        if not doctor or doctor.hospital_id!=patient.hospital_id: raise HTTPException(403,"You are not authorized for this patient.")
-    elif user.role=="hospital":
-        hospital=db.query(HospitalProfile).filter(HospitalProfile.user_id==user.id).first()
-        if not hospital or hospital.id!=patient.hospital_id: raise HTTPException(403,"You are not authorized for this patient.")
-    log_action(db,"MATCH_HISTORY_ACCESSED",user_id=user.id,target=patient_id)
-    requests=db.query(MatchRequest).filter(MatchRequest.patient_id==patient_id).all(); out=[]
-    for r in requests:
-        results=db.query(MatchResult).filter(MatchResult.match_request_id==r.id).order_by(MatchResult.rank).all(); out.append({"request":to_dict(r),"results":to_dict_list(results)})
-    return out
+    return {
+        "organ_type": body.organ_type,
+        "recipient_blood_group": body.blood_group,
+        "total_matches_found": len(results),
+        "matches": results,
+        "search_criteria": recipient_spec,
+    }
+
+
+@router.post("/allocate/{donor_id}", summary="Confirm organ allocation — locks the donor organ")
+def confirm_allocation(
+    donor_id: str,
+    user: User = Depends(require_role("HOSPITAL", "ROOT")),
+    db: Session = Depends(get_db),
+):
+    """Marks a donor organ as allocated. Prevents double-booking.
+    Writes an immutable block to the audit ledger.
+    """
+    donor = db.query(Donor).filter(Donor.id == donor_id).first()
+    if not donor:
+        raise HTTPException(404, "Donor organ not found.")
+    if donor.is_allocated:
+        raise HTTPException(409, "This organ has already been allocated to another recipient.")
+
+    requesting_hospital = None
+    if user.role == "HOSPITAL":
+        requesting_hospital = db.query(HospitalProfile).filter(
+            HospitalProfile.user_id == user.id
+        ).first()
+
+    donor.is_allocated = True
+    donor.allocated_to_hospital_id = requesting_hospital.id if requesting_hospital else None
+
+    holding_hospital = db.query(HospitalProfile).filter(
+        HospitalProfile.id == donor.hospital_id
+    ).first()
+
+    from app.audit_ledger import audit_ledger
+    audit_ledger.add_block(
+        action="ORGAN_ALLOCATION_CONFIRMED",
+        details={
+            "donor_id": donor_id,
+            "organ_type": donor.organ_type,
+            "allocated_by_user": user.id,
+            "allocated_to_hospital": requesting_hospital.hospital_name if requesting_hospital else "ROOT",
+            "holding_hospital": holding_hospital.hospital_name if holding_hospital else "Unknown",
+        },
+    )
+
+    audit = AuditLog(
+        user_id=user.id, action="ORGAN_ALLOCATION_CONFIRMED",
+        target=donor_id,
+        meta={"organ_type": donor.organ_type, "hospital": requesting_hospital.hospital_name if requesting_hospital else "ROOT"},
+    )
+    db.add(audit)
+    db.commit()
+
+    # Send email alerts to both hospitals
+    try:
+        from app.services.mailer import notify_hospital_approval_status
+        if requesting_hospital:
+            notify_hospital_approval_status(
+                requesting_hospital.contact_email,
+                requesting_hospital.hospital_name,
+                "ORGAN_ALLOCATED",
+                f"Organ: {donor.organ_type} | Donor Hospital: {holding_hospital.hospital_name if holding_hospital else 'N/A'}"
+            )
+    except Exception:
+        pass
+
+    return {
+        "status": "ALLOCATED",
+        "donor_id": donor_id,
+        "organ_type": donor.organ_type,
+        "allocated_to": requesting_hospital.hospital_name if requesting_hospital else "ROOT",
+        "message": f"✅ {donor.organ_type} organ successfully allocated and locked. Contact the holding hospital immediately to arrange transfer.",
+    }
+
+
+@router.post("/urgent-request", summary="Submit urgent organ request with 10-min ESP32 failover")
+def create_urgent_organ_request(
+    body: UrgentRequestIn,
+    user: User = Depends(require_role("HOSPITAL")),
+    db: Session = Depends(get_db),
+):
+    hospital = db.query(HospitalProfile).filter(HospitalProfile.user_id == user.id).first()
+    if not hospital or hospital.status != "APPROVED":
+        raise HTTPException(403, "Hospital must be APPROVED to submit urgent requests.")
+
+    now = datetime.now(timezone.utc)
+    req = OrganRequest(
+        requesting_hospital_id=hospital.id,
+        patient_name=body.patient_name or "Anonymized Recipient",
+        organ_type=body.organ_type.strip().capitalize(),
+        blood_group=body.blood_group.strip().upper(),
+        rh_factor=body.rh_factor,
+        hla_a=body.hla_a, hla_b=body.hla_b,
+        hla_c=body.hla_c, hla_dr=body.hla_dr, hla_dq=body.hla_dq,
+        urgency_level=body.urgency_level,
+        status="OPEN",
+        timeout_at=now + timedelta(minutes=10),
+    )
+    db.add(req)
+    audit = AuditLog(
+        user_id=user.id, action="URGENT_ORGAN_REQUEST_SUBMITTED",
+        target=req.id,
+        meta={"organ": body.organ_type, "urgency": body.urgency_level,
+              "hospital": hospital.hospital_name},
+    )
+    db.add(audit)
+    db.commit()
+
+    return {
+        "status": "OPEN",
+        "request_id": req.id,
+        "timeout_at": req.timeout_at.isoformat(),
+        "message": (f"Urgent request for {body.organ_type} ({body.blood_group}) submitted. "
+                    "If unacted within 10 minutes, the ESP32 Autonomous Failover Engine triggers automatically."),
+    }
+
+
+@router.get("/my-requests", summary="Hospital's own urgent request history")
+def get_my_urgent_requests(
+    user: User = Depends(require_role("HOSPITAL")),
+    db: Session = Depends(get_db),
+):
+    hospital = db.query(HospitalProfile).filter(HospitalProfile.user_id == user.id).first()
+    if not hospital:
+        return []
+    return db.query(OrganRequest).filter(
+        OrganRequest.requesting_hospital_id == hospital.id
+    ).order_by(OrganRequest.created_at.desc()).all()
+
+
+@router.get("/all-requests", summary="Root: all urgent requests nationally")
+def get_all_urgent_requests(
+    user: User = Depends(require_role("ROOT")),
+    db: Session = Depends(get_db),
+):
+    return db.query(OrganRequest).order_by(OrganRequest.created_at.desc()).all()

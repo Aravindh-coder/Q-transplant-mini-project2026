@@ -1,151 +1,337 @@
-from fastapi import APIRouter, Depends, HTTPException
+"""Root Organizer Router for Q-Transplant v4."""
+import csv
+import io
+from datetime import datetime, timezone
+from typing import Optional
+from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
+
 from app.database import get_db
-from app.models import User, DoctorProfile, DonorProfile, HospitalProfile, Patient, TransplantCase, AuditLog, MatchRequest, MatchResult, EmergencyRequest, Document
+from app.models import User, HospitalProfile, AutonomousIncidentLog, AuditLog, Donor, Recipient
 from app.security import require_role
-from app.services.audit import log_action
-from app.services.notifications import notify
-from app.services.search_service import paginate
-from app.services.performance import bounded_page, DEFAULT_PAGE_SIZE
-from app.utils import to_dict, to_dict_list
-router=APIRouter(prefix="/api/v1/organizer",tags=["organizer"])
+from app.services.mailer import notify_hospital_approval_status
+from app.services.autonomous_failover import check_and_execute_autonomous_failover
 
-def _doctor_review(db,doctor):
- account=db.query(User).filter(User.id==doctor.user_id).first(); docs=db.query(Document).filter(Document.owner_user_id==doctor.user_id).all()
- return {"doctor":to_dict(doctor),"user":to_dict(account),"documents":to_dict_list(docs),"photo_submitted":bool(doctor.photo_document_id),"certificate_submitted":bool(doctor.certificate_document_id)}
-@router.get("/doctors/pending")
-def pending_doctors(user=Depends(require_role("organizer")),db:Session=Depends(get_db)):
- return [_doctor_review(db,d) for d in db.query(DoctorProfile).filter(DoctorProfile.approval_status.in_(["pending","PENDING_APPROVAL","ORGANIZER_REVIEW","REQUESTED_INFO"])).all()]
-@router.get("/doctors/{doctor_id}/review")
-def review_doctor(doctor_id,user=Depends(require_role("organizer")),db:Session=Depends(get_db)):
- d=db.query(DoctorProfile).filter(DoctorProfile.id==doctor_id).first()
- if not d: raise HTTPException(404,"Doctor not found")
- return _doctor_review(db,d)
-@router.post("/doctors/{doctor_id}/approve")
-def approve_doctor(doctor_id,user=Depends(require_role("organizer")),db:Session=Depends(get_db)):
- d=db.query(DoctorProfile).filter(DoctorProfile.id==doctor_id).first()
- if not d: raise HTTPException(404,"Doctor profile not found")
- if not d.photo_document_id or not d.certificate_document_id: raise HTTPException(400,"Doctor photo and medical certificate are mandatory before approval")
- d.approval_status="APPROVED"; account=db.query(User).filter(User.id==d.user_id).first(); account.status="active"; account.email_verified=True; db.commit(); notify(db,account,"Doctor account approved","Your doctor account has been approved.",priority="high",also_email=True); log_action(db,"DOCTOR_APPROVED",user_id=user.id,target=doctor_id); return {"id":d.id,"approval_status":d.approval_status}
-@router.post("/doctors/{doctor_id}/reject")
-def reject_doctor(doctor_id,reason="",user=Depends(require_role("organizer")),db:Session=Depends(get_db)):
- d=db.query(DoctorProfile).filter(DoctorProfile.id==doctor_id).first()
- if not d: raise HTTPException(404,"Doctor profile not found")
- d.approval_status="REJECTED"; a=db.query(User).filter(User.id==d.user_id).first(); a.status="rejected"; db.commit(); notify(db,a,"Doctor registration rejected",f"Your registration was rejected. {reason}".strip(),priority="high",also_email=True); log_action(db,"DOCTOR_REJECTED",user_id=user.id,target=doctor_id,meta={"reason":reason}); return {"id":d.id,"approval_status":d.approval_status}
-@router.post("/doctors/{doctor_id}/request-information")
-def request_doctor_information(doctor_id,message="Please provide the requested additional information.",user=Depends(require_role("organizer")),db:Session=Depends(get_db)):
- d=db.query(DoctorProfile).filter(DoctorProfile.id==doctor_id).first()
- if not d: raise HTTPException(404,"Doctor profile not found")
- d.approval_status="REQUESTED_INFO"; a=db.query(User).filter(User.id==d.user_id).first(); db.commit(); notify(db,a,"Additional information required",message,priority="high",also_email=True); log_action(db,"DOCTOR_INFO_REQUESTED",user_id=user.id,target=doctor_id,meta={"message":message}); return {"id":doctor_id,"approval_status":d.approval_status}
-@router.post("/hospitals/{hospital_id}/verify")
-def verify_hospital(hospital_id,user=Depends(require_role("organizer")),db:Session=Depends(get_db)):
- h=db.query(HospitalProfile).filter(HospitalProfile.id==hospital_id).first()
- if not h: raise HTTPException(404,"Hospital not found")
- if not h.license_document_id: raise HTTPException(400,"Hospital must submit a registration/license document before verification.")
- h.verification_status="verified"; a=db.query(User).filter(User.id==h.user_id).first(); a.status="active"; a.email_verified=True; db.commit(); notify(db,a,"Hospital verification approved","Your hospital account is verified.",priority="high",also_email=True); log_action(db,"HOSPITAL_VERIFIED",user_id=user.id,target=hospital_id); return {"id":h.id,"verification_status":h.verification_status}
+router = APIRouter(prefix="/api/v1/organizer", tags=["Root Organizer"])
 
-def _donor_review(db,donor):
- account=db.query(User).filter(User.id==donor.user_id).first()
- doc=db.query(Document).filter(Document.id==donor.medical_document_id).first() if donor.medical_document_id else None
- return {"donor":to_dict(donor,exclude={"phone","address","date_of_birth","gender"}),"user":{"id":account.id,"full_name":account.full_name,"email":account.email} if account else None,"medical_document":to_dict(doc),"document_submitted":bool(donor.medical_document_id)}
-@router.get("/donors/pending")
-def pending_donors(user=Depends(require_role("organizer")),db:Session=Depends(get_db)):
- return [_donor_review(db,d) for d in db.query(DonorProfile).filter(DonorProfile.verification_status.in_(["pending","under_review"])).all()]
-@router.get("/donors/{donor_id}/review")
-def review_donor(donor_id,user=Depends(require_role("organizer")),db:Session=Depends(get_db)):
- d=db.query(DonorProfile).filter(DonorProfile.id==donor_id).first()
- if not d: raise HTTPException(404,"Donor not found")
- return _donor_review(db,d)
-@router.post("/donors/{donor_id}/verify")
-def verify_donor(donor_id,user=Depends(require_role("organizer")),db:Session=Depends(get_db)):
- d=db.query(DonorProfile).filter(DonorProfile.id==donor_id).first()
- if not d: raise HTTPException(404,"Donor not found")
- if not d.medical_document_id: raise HTTPException(400,"Donor must submit a medical document before verification.")
- if not d.hospital_id: raise HTTPException(400,"Donor must be linked to a verified hospital before verification -- this is what appears in search results in place of the donor's own identity.")
- d.verification_status="verified"; account=db.query(User).filter(User.id==d.user_id).first()
- db.commit(); notify(db,account,"Donor account verified","Your donor profile has been verified and is now visible in hospital searches.",priority="high",also_email=True); log_action(db,"DONOR_VERIFIED",user_id=user.id,target=donor_id); return {"id":d.id,"verification_status":d.verification_status}
-@router.post("/donors/{donor_id}/reject")
-def reject_donor(donor_id,reason="",user=Depends(require_role("organizer")),db:Session=Depends(get_db)):
- d=db.query(DonorProfile).filter(DonorProfile.id==donor_id).first()
- if not d: raise HTTPException(404,"Donor not found")
- d.verification_status="rejected"; account=db.query(User).filter(User.id==d.user_id).first()
- db.commit(); notify(db,account,"Donor verification rejected",f"Your donor registration was rejected. {reason}".strip(),priority="high",also_email=True); log_action(db,"DONOR_REJECTED",user_id=user.id,target=donor_id,meta={"reason":reason}); return {"id":d.id,"verification_status":d.verification_status}
-@router.get("/users")
-def users(role:str|None=None,search:str|None=None,page:int=1,page_size:int=DEFAULT_PAGE_SIZE,user=Depends(require_role("organizer")),db:Session=Depends(get_db)):
- page,page_size=bounded_page(page,page_size)
- q=db.query(User)
- if role: q=q.filter(User.role==role)
- if search: q=q.filter((User.email.ilike(f"%{search}%"))|(User.full_name.ilike(f"%{search}%")))
- paginated=paginate(q.order_by(User.created_at.desc()),page,page_size)
- return {**paginated,"items":to_dict_list(paginated["items"])}
-@router.post("/users/{target_user_id}/activate")
-def activate_user(target_user_id,user=Depends(require_role("organizer")),db:Session=Depends(get_db)):
- t=db.query(User).filter(User.id==target_user_id).first()
- if not t: raise HTTPException(404,"User not found")
- t.status="active"; db.commit(); log_action(db,"ACCOUNT_ACTIVATED",user_id=user.id,target=t.id); return {"id":t.id,"status":t.status}
-@router.post("/users/{target_user_id}/deactivate")
-def deactivate_user(target_user_id,user=Depends(require_role("organizer")),db:Session=Depends(get_db)):
- t=db.query(User).filter(User.id==target_user_id).first()
- if not t: raise HTTPException(404,"User not found")
- t.status="inactive"; db.commit(); log_action(db,"ACCOUNT_DEACTIVATED",user_id=user.id,target=t.id); return {"id":t.id,"status":t.status}
-@router.post("/users/{target_user_id}/suspend")
-def suspend_user(target_user_id,user=Depends(require_role("organizer")),db:Session=Depends(get_db)):
- t=db.query(User).filter(User.id==target_user_id).first()
- if not t: raise HTTPException(404,"User not found")
- t.status="suspended"; db.commit(); log_action(db,"ACCOUNT_SUSPENDED",user_id=user.id,target=t.id); return {"id":t.id,"status":t.status}
-@router.post("/users/{target_user_id}/reactivate")
-def reactivate_user(target_user_id,user=Depends(require_role("organizer")),db:Session=Depends(get_db)):
- t=db.query(User).filter(User.id==target_user_id).first()
- if not t: raise HTTPException(404,"User not found")
- t.status="active"; db.commit(); log_action(db,"ACCOUNT_REACTIVATED",user_id=user.id,target=t.id); return {"id":t.id,"status":t.status}
-@router.get("/users/{target_user_id}/history")
-def user_history(target_user_id,user=Depends(require_role("organizer")),db:Session=Depends(get_db)):
- if not db.query(User).filter(User.id==target_user_id).first(): raise HTTPException(404,"User not found")
- return to_dict_list(db.query(AuditLog).filter(AuditLog.user_id==target_user_id).order_by(AuditLog.created_at.desc()).limit(200).all())
-@router.get("/stats")
-def stats(user=Depends(require_role("organizer")),db:Session=Depends(get_db)):
- return {"total_donors":db.query(DonorProfile).count(),"active_donors":db.query(DonorProfile).filter(DonorProfile.availability_status=="active").count(),"total_recipients":db.query(Patient).count(),"active_cases":db.query(TransplantCase).filter(TransplantCase.stage.notin_(["COMPLETED","CANCELLED","REJECTED"])).count(),"registered_hospitals":db.query(HospitalProfile).count(),"approved_doctors":db.query(DoctorProfile).filter(DoctorProfile.approval_status.in_(["approved","APPROVED"])).count(),"pending_doctors":db.query(DoctorProfile).filter(DoctorProfile.approval_status.in_(["pending","PENDING_APPROVAL","ORGANIZER_REVIEW","REQUESTED_INFO"])).count(),"emergency_requests":db.query(EmergencyRequest).count(),"matching_requests":db.query(MatchRequest).count(),"successful_matches":db.query(MatchResult).filter(MatchResult.overall_score>=80).count(),"completed_transplant_cases":db.query(TransplantCase).filter(TransplantCase.stage=="COMPLETED").count()}
-@router.get("/transplant-cases")
-def transplant_cases(page:int=1,page_size:int=DEFAULT_PAGE_SIZE,user=Depends(require_role("organizer")),db:Session=Depends(get_db)):
- page,page_size=bounded_page(page,page_size)
- paginated=paginate(db.query(TransplantCase).order_by(TransplantCase.created_at.desc()),page,page_size)
- return {**paginated,"items":to_dict_list(paginated["items"])}
-@router.get("/emergencies")
-def emergencies(page:int=1,page_size:int=DEFAULT_PAGE_SIZE,user=Depends(require_role("organizer")),db:Session=Depends(get_db)):
- page,page_size=bounded_page(page,page_size)
- paginated=paginate(db.query(EmergencyRequest).order_by(EmergencyRequest.created_at.desc()),page,page_size)
- return {**paginated,"items":to_dict_list(paginated["items"])}
-@router.get("/matching-requests")
-def matching_requests(page:int=1,page_size:int=DEFAULT_PAGE_SIZE,user=Depends(require_role("organizer")),db:Session=Depends(get_db)):
- page,page_size=bounded_page(page,page_size)
- paginated=paginate(db.query(MatchRequest).order_by(MatchRequest.created_at.desc()),page,page_size)
- return {**paginated,"items":to_dict_list(paginated["items"])}
-@router.get("/audit-log")
-def audit_log(limit:int=100,user=Depends(require_role("organizer","auditor")),db:Session=Depends(get_db)): return to_dict_list(db.query(AuditLog).order_by(AuditLog.created_at.desc()).limit(limit).all())
+class RejectHospitalIn(BaseModel):
+    reason: Optional[str] = "Government certificate verification incomplete or rejected."
 
-class AuditorIn(BaseModel):
-    email: str
-    password: str
-    full_name: str
+@router.get("/pending-hospitals")
+def get_pending_hospitals(user: User = Depends(require_role("ROOT")), db: Session = Depends(get_db)):
+    """Returns list of hospital applications pending manual government certificate verification."""
+    hospitals = db.query(HospitalProfile).filter(HospitalProfile.status == "PENDING_APPROVAL").order_by(HospitalProfile.created_at.desc()).all()
+    return hospitals
 
-@router.post("/auditors")
-def create_auditor(body: AuditorIn, user=Depends(require_role("organizer")), db: Session = Depends(get_db)):
-    """Auditor accounts are never self-registered -- /api/v1/auth/register
-    only ever accepts donor/doctor/hospital. An auditor gets read-only
-    access to the full audit trail (every sensitive action across the
-    whole system, across every hospital), so only an organizer can vouch
-    for one directly, with no separate approval step needed since the
-    organizer creating it IS the approval."""
-    if db.query(User).filter(User.email == body.email).first():
-        raise HTTPException(409, "An account with this email already exists.")
-    from app.security import hash_password
-    auditor = User(email=body.email, hashed_password=hash_password(body.password), role="auditor",
-                    full_name=body.full_name.strip(), status="active", email_verified=True)
-    db.add(auditor); db.commit(); db.refresh(auditor)
-    log_action(db, "AUDITOR_ACCOUNT_CREATED", user_id=user.id, target=auditor.id)
-    return {"id": auditor.id, "email": auditor.email, "role": "auditor"}
+@router.get("/hospitals")
+def get_all_hospitals(user: User = Depends(require_role("ROOT")), db: Session = Depends(get_db)):
+    """Returns all registered hospitals across the network."""
+    hospitals = db.query(HospitalProfile).order_by(HospitalProfile.created_at.desc()).all()
+    return hospitals
 
-@router.get("/auditors")
-def list_auditors(user=Depends(require_role("organizer")), db: Session = Depends(get_db)):
-    return to_dict_list(db.query(User).filter(User.role == "auditor").all())
+@router.post("/hospitals/{hospital_id}/approve")
+def approve_hospital(hospital_id: str, user: User = Depends(require_role("ROOT")), db: Session = Depends(get_db)):
+    """Approves a hospital application after manual government certificate inspection."""
+    hospital = db.query(HospitalProfile).filter(HospitalProfile.id == hospital_id).first()
+    if not hospital:
+        raise HTTPException(status_code=404, detail="Hospital record not found.")
+
+    hospital.status = "APPROVED"
+    hospital.rejection_reason = None
+
+    # Audit log
+    audit = AuditLog(
+        user_id=user.id,
+        action="ROOT_APPROVED_HOSPITAL",
+        target=hospital.id,
+        meta={"hospital_name": hospital.hospital_name, "registration_number": hospital.registration_number}
+    )
+    db.add(audit)
+    db.commit()
+
+    # Dispatch Automated Approval Email
+    notify_hospital_approval_status(hospital.contact_email, hospital.hospital_name, "APPROVED")
+
+    return {"status": "APPROVED", "message": f"Hospital '{hospital.hospital_name}' has been successfully approved!"}
+
+@router.post("/hospitals/{hospital_id}/reject")
+def reject_hospital(hospital_id: str, body: RejectHospitalIn, user: User = Depends(require_role("ROOT")), db: Session = Depends(get_db)):
+    """Rejects a hospital application with specified reason."""
+    hospital = db.query(HospitalProfile).filter(HospitalProfile.id == hospital_id).first()
+    if not hospital:
+        raise HTTPException(status_code=404, detail="Hospital record not found.")
+
+    hospital.status = "REJECTED"
+    hospital.rejection_reason = body.reason
+
+    # Audit log
+    audit = AuditLog(
+        user_id=user.id,
+        action="ROOT_REJECTED_HOSPITAL",
+        target=hospital.id,
+        meta={"hospital_name": hospital.hospital_name, "reason": body.reason}
+    )
+    db.add(audit)
+    db.commit()
+
+    # Dispatch Automated Rejection Email
+    notify_hospital_approval_status(hospital.contact_email, hospital.hospital_name, "REJECTED", body.reason)
+
+    return {"status": "REJECTED", "message": f"Hospital '{hospital.hospital_name}' application has been rejected."}
+
+@router.get("/failover-incidents")
+def get_failover_incidents(user: User = Depends(require_role("ROOT")), db: Session = Depends(get_db)):
+    """Returns log of ESP32 Autonomous Failover incidents triggered by 10-minute organizer timeouts."""
+    incidents = db.query(AutonomousIncidentLog).order_by(AutonomousIncidentLog.triggered_at.desc()).all()
+    return incidents
+
+@router.post("/trigger-failover")
+def trigger_failover_scan(user: User = Depends(require_role("ROOT")), db: Session = Depends(get_db)):
+    """Manually triggers ESP32 Autonomous Failover engine scan."""
+    results = check_and_execute_autonomous_failover(db)
+    return {"status": "COMPLETED", "incidents_executed": results}
+
+@router.get("/audit-logs")
+def get_audit_logs(user: User = Depends(require_role("ROOT")), db: Session = Depends(get_db)):
+    """Returns global system audit logs."""
+    logs = db.query(AuditLog).order_by(AuditLog.created_at.desc()).limit(100).all()
+    return logs
+
+@router.get("/hospital-datasets")
+def get_hospital_datasets(user: User = Depends(require_role("ROOT")), db: Session = Depends(get_db)):
+    """Returns all hospitals grouped with their complete donor organ datasets."""
+    hospitals = db.query(HospitalProfile).order_by(HospitalProfile.hospital_name.asc()).all()
+    result = []
+    for h in hospitals:
+        donors = db.query(Donor).filter(Donor.hospital_id == h.id).order_by(Donor.created_at.desc()).all()
+        result.append({
+            "hospital_id": h.id,
+            "hospital_name": h.hospital_name,
+            "registration_number": h.registration_number,
+            "state": h.state,
+            "contact_email": h.contact_email,
+            "reception_phone": h.reception_phone,
+            "status": h.status,
+            "donor_count": len(donors),
+            "donors": [
+                _donor_row(d)
+                for d in donors
+            ]
+        })
+    return result
+
+
+@router.get("/export-donors-csv", summary="Download complete national donor dataset as CSV/Excel")
+def export_donors_csv(user: User = Depends(require_role("ROOT")), db: Session = Depends(get_db)):
+    """Generates and streams a full CSV spreadsheet of all donors nationwide across all accredited hospitals."""
+    output = io.StringIO()
+    writer = csv.writer(output)
+    
+    # Write Excel/CSV Header
+    writer.writerow([
+        "Donor_ID", "Hospital_Name", "State", "Registration_No", 
+        "Organ_Type", "Blood_Group", "Rh_Factor", 
+        "HLA_A", "HLA_B", "HLA_C", "HLA_DR", "HLA_DQ", 
+        "Age", "Gender", "Health_Status", 
+        "Stored_Viability_Hrs", "Realtime_Viability_Hrs", "Allocation_Status", "Uploaded_At"
+    ])
+    
+    donors = db.query(Donor).order_by(Donor.created_at.desc()).all()
+    now = datetime.now(timezone.utc)
+    
+    for d in donors:
+        hosp = db.query(HospitalProfile).filter(HospitalProfile.id == d.hospital_id).first()
+        uploaded = d.uploaded_at or d.created_at
+        if uploaded and uploaded.tzinfo is None:
+            uploaded = uploaded.replace(tzinfo=timezone.utc)
+        elapsed_hrs = (now - uploaded).total_seconds() / 3600.0 if uploaded else 0
+        actual_viability = max(0.0, round(d.viability_hours_remaining - elapsed_hrs, 1))
+        
+        status_str = "ALLOCATED" if d.is_allocated else ("EXPIRED" if actual_viability == 0 else "VIABLE / AVAILABLE")
+        
+        writer.writerow([
+            d.id,
+            hosp.hospital_name if hosp else "Unknown",
+            hosp.state if hosp else "N/A",
+            hosp.registration_number if hosp else "N/A",
+            d.organ_type,
+            d.blood_group,
+            d.rh_factor or "+",
+            d.hla_a or "N/A",
+            d.hla_b or "N/A",
+            d.hla_c or "N/A",
+            d.hla_dr or "N/A",
+            d.hla_dq or "N/A",
+            d.age or "N/A",
+            d.gender or "N/A",
+            d.health_status or "OPTIMAL",
+            d.viability_hours_remaining,
+            actual_viability,
+            status_str,
+            uploaded.isoformat() if uploaded else ""
+        ])
+    
+    csv_content = output.getvalue()
+    return Response(
+        content=csv_content,
+        media_type="text/csv",
+        headers={
+            "Content-Disposition": "attachment; filename=national_organ_donors_dataset.csv"
+        }
+    )
+
+@router.get("/audit-ledger", summary="SHA-256 cryptographic audit ledger")
+def get_audit_ledger(user: User = Depends(require_role("ROOT"))):
+    from app.audit_ledger import audit_ledger
+    return {
+        "status": "SECURE",
+        "chain_valid": audit_ledger.is_chain_valid(),
+        "total_blocks": audit_ledger.total_blocks,
+        "ledger": audit_ledger.get_chain_dicts(),
+    }
+
+
+@router.get("/national-waiting-list", summary="National recipient waiting queue grouped by organ type")
+def get_national_waiting_list(
+    user: User = Depends(require_role("ROOT")),
+    db: Session = Depends(get_db),
+):
+    """Returns all WAITING recipients nationwide, grouped by organ type, with urgency breakdown."""
+    recipients = db.query(Recipient).filter(Recipient.status == "WAITING").all()
+    grouped: dict = {}
+    for r in recipients:
+        hosp = db.query(HospitalProfile).filter(HospitalProfile.id == r.hospital_id).first()
+        organ = r.organ_needed
+        if organ not in grouped:
+            grouped[organ] = {"organ": organ, "total": 0, "CRITICAL": 0, "HIGH": 0, "MEDIUM": 0, "patients": []}
+        grouped[organ]["total"] += 1
+        grouped[organ][r.urgency_level] = grouped[organ].get(r.urgency_level, 0) + 1
+        grouped[organ]["patients"].append({
+            "recipient_id": r.id,
+            "patient_code": r.patient_code,
+            "blood_group": r.blood_group,
+            "urgency_level": r.urgency_level,
+            "pra_percentage": r.pra_percentage,
+            "registered_at": r.registered_at.isoformat() if r.registered_at else None,
+            "hospital_name": hosp.hospital_name if hosp else "Unknown",
+            "hospital_state": hosp.state if hosp else "Unknown",
+        })
+    # Sort each organ group: CRITICAL first
+    urgency_order = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2}
+    for g in grouped.values():
+        g["patients"].sort(key=lambda x: urgency_order.get(x["urgency_level"], 3))
+    return {
+        "total_waiting": len(recipients),
+        "by_organ": list(grouped.values()),
+    }
+
+
+@router.get("/full-database-dump", summary="Root DB Inspector: Full schema dump of all system tables")
+def full_database_dump(user: User = Depends(require_role("ROOT")), db: Session = Depends(get_db)):
+    """Returns complete database tables dump for the System Database Explorer."""
+    from app.audit_ledger import audit_ledger
+    
+    hospitals = db.query(HospitalProfile).order_by(HospitalProfile.hospital_name.asc()).all()
+    donors = db.query(Donor).order_by(Donor.created_at.desc()).all()
+    recipients = db.query(Recipient).order_by(Recipient.registered_at.desc()).all()
+    users = db.query(User).all()
+    incidents = db.query(AutonomousIncidentLog).order_by(AutonomousIncidentLog.triggered_at.desc()).all()
+    
+    hosp_map = {h.id: h.hospital_name for h in hospitals}
+    
+    hospitals_dump = [
+        {
+            "id": h.id,
+            "hospital_name": h.hospital_name,
+            "registration_number": h.registration_number,
+            "state": h.state,
+            "contact_email": h.contact_email,
+            "reception_phone": h.reception_phone,
+            "doctor_name": getattr(h, "doctor_name", "N/A"),
+            "doctor_phone": getattr(h, "doctor_phone", "N/A"),
+            "status": h.status,
+            "latitude": h.latitude,
+            "longitude": h.longitude,
+            "created_at": h.created_at.isoformat() if h.created_at else None
+        } for h in hospitals
+    ]
+    
+    donors_dump = []
+    for d in donors:
+        row = _donor_row(d)
+        row["hospital_name"] = hosp_map.get(d.hospital_id, "Unknown Hospital")
+        donors_dump.append(row)
+        
+    recipients_dump = [
+        {
+            "id": r.id,
+            "patient_code": r.patient_code,
+            "hospital_id": r.hospital_id,
+            "hospital_name": hosp_map.get(r.hospital_id, "Unknown Hospital"),
+            "organ_needed": r.organ_needed,
+            "blood_group": r.blood_group,
+            "hla_a": r.hla_a, "hla_b": r.hla_b, "hla_c": r.hla_c,
+            "hla_dr": r.hla_dr, "hla_dq": r.hla_dq,
+            "pra_percentage": r.pra_percentage,
+            "urgency_level": r.urgency_level,
+            "status": r.status,
+            "registered_at": r.registered_at.isoformat() if r.registered_at else None,
+            "additional_notes": r.additional_notes
+        } for r in recipients
+    ]
+    
+    users_dump = [
+        {
+            "id": u.id,
+            "email": u.email,
+            "role": u.role,
+            "full_name": u.full_name,
+            "status": u.status
+        } for u in users
+    ]
+    
+    return {
+        "db_engine": "SQLite / PostgreSQL Relational Database Engine (Q-Transplant v4)",
+        "tables_count": 5,
+        "summary": {
+            "hospitals_count": len(hospitals_dump),
+            "donors_count": len(donors_dump),
+            "recipients_count": len(recipients_dump),
+            "users_count": len(users_dump),
+            "ledger_blocks": audit_ledger.total_blocks,
+            "incidents_count": len(incidents)
+        },
+        "tables": {
+            "hospitals": hospitals_dump,
+            "donors": donors_dump,
+            "recipients": recipients_dump,
+            "users": users_dump,
+            "ledger": audit_ledger.get_chain_dicts()
+        }
+    }
+
+
+def _donor_row(d: Donor) -> dict:
+    """Format a donor row with real-time viability decay."""
+    now = datetime.now(timezone.utc)
+    uploaded = d.uploaded_at or d.created_at
+    if uploaded and uploaded.tzinfo is None:
+        uploaded = uploaded.replace(tzinfo=timezone.utc)
+    elapsed_hrs = (now - uploaded).total_seconds() / 3600.0 if uploaded else 0
+    actual_viability = max(0.0, round(d.viability_hours_remaining - elapsed_hrs, 1))
+    return {
+        "id": d.id,
+        "organ_type": d.organ_type,
+        "blood_group": d.blood_group,
+        "rh_factor": d.rh_factor,
+        "hla_a": d.hla_a, "hla_b": d.hla_b, "hla_c": d.hla_c,
+        "hla_dr": d.hla_dr, "hla_dq": d.hla_dq,
+        "age": d.age, "gender": d.gender,
+        "health_status": d.health_status,
+        "viability_hours_stored": d.viability_hours_remaining,
+        "viability_hours_actual": actual_viability,
+        "is_allocated": bool(d.is_allocated),
+        "uploaded_at": d.uploaded_at.isoformat() if d.uploaded_at else None,
+        "created_at": d.created_at.isoformat() if d.created_at else None,
+    }

@@ -17,6 +17,8 @@ def hash_password(pw: str) -> str:
         raise ValueError("Password is too long; maximum is 72 UTF-8 bytes.")
     return bcrypt.hashpw(pw.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
 
+get_password_hash = hash_password
+
 def verify_password(pw: str, hashed: str) -> bool:
     try:
         return bcrypt.checkpw(pw.encode("utf-8")[:_BCRYPT_MAX_BYTES], hashed.encode("utf-8"))
@@ -26,10 +28,20 @@ def verify_password(pw: str, hashed: str) -> bool:
 def token_fingerprint(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()
 
-def create_access_token(user: User, minutes: int | None = None) -> str:
-    payload = {"sub": user.id, "email": user.email, "role": user.role,
-               "exp": datetime.now(timezone.utc) + timedelta(minutes=minutes if minutes is not None else settings.ACCESS_TOKEN_MINUTES)}
+def create_access_token(user_or_data=None, minutes: int | None = None, data: dict | None = None) -> str:
+    if isinstance(user_or_data, User):
+        payload = {"sub": user_or_data.id, "email": user_or_data.email, "role": user_or_data.role}
+    elif isinstance(data, dict):
+        payload = data.copy()
+    elif isinstance(user_or_data, dict):
+        payload = user_or_data.copy()
+    else:
+        payload = {}
+        
+    payload["exp"] = datetime.now(timezone.utc) + timedelta(minutes=minutes if minutes is not None else settings.ACCESS_TOKEN_MINUTES)
     return jwt.encode(payload, settings.JWT_SECRET, algorithm=settings.JWT_ALGO)
+
+
 
 def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)) -> User:
     if not token:

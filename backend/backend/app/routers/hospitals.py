@@ -1,62 +1,46 @@
+"""Hospitals Directory Router for Q-Transplant v2."""
 from typing import Optional
-
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.models import User, HospitalProfile
-from app.security import require_role, get_current_user
-from app.services.search_service import paginate
-from app.services.performance import bounded_page, DEFAULT_PAGE_SIZE
-from app.utils import to_dict, to_dict_list
+from app.security import get_current_user, require_role
 
 router = APIRouter(prefix="/api/v1/hospitals", tags=["hospitals"])
 
-
 @router.get("/directory")
-def hospital_directory(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    """Minimal, any-authenticated-role list of verified hospitals -- exists
-    so a donor (who can't call GET /hospitals, restricted to
-    doctor/hospital/organizer) has a way to pick which hospital they're
-    registering through. Deliberately narrow: id/name/location only, none
-    of the institutional contact fields GET /hospitals exposes to
-    clinical/admin roles."""
-    hospitals = db.query(HospitalProfile).filter(HospitalProfile.verification_status.in_(["verified", "approved"])).all()
-    return [{"id": h.id, "hospital_name": h.hospital_name, "location": h.location} for h in hospitals]
-
-
-class HospitalProfileIn(BaseModel):
-    hospital_name: str
-    hospital_code: str
-    phone: Optional[str] = None
-    address: Optional[str] = None
-
-
-@router.put("/me")
-def upsert_my_profile(body: HospitalProfileIn, user: User = Depends(require_role("hospital")), db: Session = Depends(get_db)):
-    profile = db.query(HospitalProfile).filter(HospitalProfile.user_id == user.id).first()
-    if not profile:
-        profile = HospitalProfile(user_id=user.id, hospital_name=body.hospital_name, hospital_code=body.hospital_code)
-        db.add(profile)
-    for field, value in body.model_dump(exclude_unset=True).items():
-        setattr(profile, field, value)
-    db.commit()
-    db.refresh(profile)
-    return {"id": profile.id, "verification_status": profile.verification_status}
-
+def hospital_directory(db: Session = Depends(get_db)):
+    """Returns directory of approved hospitals across the network."""
+    hospitals = db.query(HospitalProfile).filter(HospitalProfile.status == "APPROVED").all()
+    return [
+        {
+            "id": h.id,
+            "hospital_name": h.hospital_name,
+            "state": h.state,
+            "address": h.address,
+            "reception_phone": h.reception_phone,
+            "contact_email": h.contact_email,
+            "doctor_name": h.doctor_name
+        }
+        for h in hospitals
+    ]
 
 @router.get("/me")
-def get_my_profile(user: User = Depends(require_role("hospital")), db: Session = Depends(get_db)):
+def get_my_hospital_profile(user: User = Depends(require_role("HOSPITAL")), db: Session = Depends(get_db)):
+    """Returns logged-in hospital's own profile."""
     profile = db.query(HospitalProfile).filter(HospitalProfile.user_id == user.id).first()
     if not profile:
-        raise HTTPException(404, "No hospital profile yet — PUT /hospitals/me to create one.")
-    return to_dict(profile)
-
-
-@router.get("")
-def list_hospitals(page: int = 1, page_size: int = DEFAULT_PAGE_SIZE,
-                    user: User = Depends(require_role("doctor", "hospital", "organizer")), db: Session = Depends(get_db)):
-    page, page_size = bounded_page(page, page_size)
-    paginated = paginate(db.query(HospitalProfile), page, page_size)
-    return {**paginated, "items": to_dict_list(paginated["items"])}
+        raise HTTPException(status_code=404, detail="Hospital profile not found.")
+    return {
+        "id": profile.id,
+        "hospital_name": profile.hospital_name,
+        "registration_number": profile.registration_number,
+        "state": profile.state,
+        "address": profile.address,
+        "contact_email": profile.contact_email,
+        "reception_phone": profile.reception_phone,
+        "doctor_name": profile.doctor_name,
+        "doctor_aadhaar_masked": profile.doctor_aadhaar_masked,
+        "status": profile.status
+    }

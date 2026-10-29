@@ -1,0 +1,11 @@
+organ_type,blood_group,rh_factor,hla_a,hla_b,hla_c,hla_dr,hla_dq,age,gender,health_status,viability_hours_remaining
+Kidney,O+,+,A2,B7,Cw7,DR4,DQ2,32,M,Optimal,22.5
+Heart,O-,-,A1,B8,Cw3,DR3,DQ2,24,F,Optimal,5.5
+Liver,A+,+,A11,B35,Cw4,DR15,DQ6,45,M,Optimal,18.0
+Pancreas,B+,+,A24,B51,Cw15,DR4,DQ8,29,F,Optimal,14.0
+Lungs,AB+,+,A3,B27,Cw1,DR1,DQ5,30,M,Optimal,8.0
+Kidney,O-,+,A2,B44,Cw5,DR7,DQ3,38,F,Optimal,21.0
+Liver,B-,+,A1,B8,Cw7,DR3,DQ2,50,M,Optimal,16.5
+Heart,A-,-,A2,B7,Cw3,DR4,DQ2,22,M,Optimal,4.0
+Cornea,O+,+,A24,B35,Cw4,DR15,DQ6,60,F,Optimal,48.0
+Kidney,AB-,+,A11,B51,Cw15,DR4,DQ8,34,M,Optimal,19.5

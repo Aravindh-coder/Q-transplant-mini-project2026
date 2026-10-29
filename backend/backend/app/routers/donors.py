@@ -1,296 +1,159 @@
-from typing import Optional
+"""Donor Registry & Bulk CSV Ingestion Router for Q-Transplant v2."""
 import csv
 import io
-import uuid
-
-from fastapi import APIRouter, Depends, HTTPException, File, UploadFile
-from pydantic import BaseModel, Field
+from typing import Optional, List
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.models import User, DonorProfile, Document, HospitalProfile
-from app.security import require_role, hash_password
-from app.services.audit import log_action
-from app.services.search_service import paginate
-from app.services.performance import bounded_page, DEFAULT_PAGE_SIZE
-from app.utils import to_dict, to_dict_list
+from app.models import User, HospitalProfile, Donor, AuditLog
+from app.security import require_role, get_current_user
 
 router = APIRouter(prefix="/api/v1/donors", tags=["donors"])
-DONATION_STATUSES = {"ACTIVE", "UNDER REVIEW", "MATCHED", "DONATION IN PROCESS", "COMPLETED", "INACTIVE"}
-VALID_BLOOD_GROUPS = {"O+", "O-", "A+", "A-", "B+", "B-", "AB+", "AB-"}
-MAX_IMPORT_ROWS = 5000
-# Raw HLA typing and free-text medical notes, alongside donor PII, are
-# excluded from browse/search results via _DONOR_PII_FIELDS below. HLA
-# detail for a specific, authorized candidate is available only via the
-# ownership-checked, audited /api/v1/hla/compare/{donor_id}/{patient_id}
-# endpoint.
 
-
-class DonorProfileIn(BaseModel):
-    date_of_birth: Optional[str] = None
-    gender: Optional[str] = None
-    phone: Optional[str] = None
-    address: Optional[str] = None
+class SingleDonorIn(BaseModel):
+    organ_type: str
     blood_group: str
-    organs_available: list[str] = Field(default_factory=list)
+    rh_factor: Optional[str] = "+"
     hla_a: Optional[str] = None
     hla_b: Optional[str] = None
     hla_c: Optional[str] = None
     hla_dr: Optional[str] = None
     hla_dq: Optional[str] = None
-    medical_information: Optional[str] = None
-    hospital_id: Optional[str] = None
+    age: Optional[int] = 35
+    gender: Optional[str] = "M"
+    health_status: Optional[str] = "Optimal"
+    viability_hours_remaining: Optional[float] = 24.0
 
+@router.post("")
+def add_single_donor(body: SingleDonorIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Registers a single donor organ record for approved hospital or Root Organizer."""
+    if user.role not in ("HOSPITAL", "ROOT"):
+        raise HTTPException(status_code=403, detail="Access denied.")
 
-class DonationStatusIn(BaseModel):
-    status: str
+    hospital = None
+    if user.role == "HOSPITAL":
+        hospital = db.query(HospitalProfile).filter(HospitalProfile.user_id == user.id).first()
+        if not hospital or hospital.status != "APPROVED":
+            raise HTTPException(status_code=403, detail="Hospital account must be APPROVED to upload donors.")
+    else:
+        hospital = db.query(HospitalProfile).filter(HospitalProfile.status == "APPROVED").first()
+        if not hospital:
+            raise HTTPException(status_code=400, detail="No approved hospital exists yet to attach donor record.")
 
+    donor = Donor(
+        hospital_id=hospital.id,
+        organ_type=body.organ_type.strip().capitalize(),
+        blood_group=body.blood_group.strip().upper(),
+        rh_factor=body.rh_factor.strip(),
+        hla_a=body.hla_a,
+        hla_b=body.hla_b,
+        hla_c=body.hla_c,
+        hla_dr=body.hla_dr,
+        hla_dq=body.hla_dq,
+        age=body.age,
+        gender=body.gender,
+        health_status=body.health_status,
+        viability_hours_remaining=body.viability_hours_remaining
+    )
+    db.add(donor)
 
-@router.put("/me")
-def upsert_my_profile(body: DonorProfileIn, user: User = Depends(require_role("donor")), db: Session = Depends(get_db)):
-    profile = db.query(DonorProfile).filter(DonorProfile.user_id == user.id).first()
-    if not profile:
-        profile = DonorProfile(user_id=user.id, blood_group=body.blood_group.upper(), donation_status="ACTIVE")
-        db.add(profile)
-    data = body.model_dump(exclude_unset=True)
-    data["blood_group"] = body.blood_group.upper()
-    if "hospital_id" in data and data["hospital_id"]:
-        # The hospital a donor is registering through -- its contact details
-        # are what a requesting hospital sees in search/match results, never
-        # the donor's own identity. Must be a real, organizer-verified
-        # hospital; a stale/changed hospital link resets verification so a
-        # newly-linked hospital can't inherit a prior approval it never
-        # reviewed.
-        hospital = db.query(HospitalProfile).filter(HospitalProfile.id == data["hospital_id"]).first()
-        if not hospital or hospital.verification_status.lower() not in {"verified", "approved"}:
-            raise HTTPException(400, "hospital_id must reference an organizer-verified hospital.")
-        if profile.hospital_id != data["hospital_id"]:
-            profile.verification_status = "pending"
-    for field, value in data.items():
-        setattr(profile, field, value)
+    audit = AuditLog(
+        user_id=user.id,
+        action="DONOR_ORGAN_UPLOADED",
+        target=donor.id,
+        meta={"organ": body.organ_type, "blood_group": body.blood_group, "hospital": hospital.hospital_name}
+    )
+    db.add(audit)
     db.commit()
-    db.refresh(profile)
-    log_action(db, "DONOR_PROFILE_UPDATED", user_id=user.id)
-    return to_dict(profile)
 
+    return {"status": "SUCCESS", "donor_id": donor.id, "message": f"{body.organ_type} donor record added successfully!"}
 
-@router.get("/me")
-def get_my_profile(user: User = Depends(require_role("donor")), db: Session = Depends(get_db)):
-    profile = db.query(DonorProfile).filter(DonorProfile.user_id == user.id).first()
-    if not profile:
-        raise HTTPException(404, "No donor profile yet — PUT /donors/me to create one.")
-    return to_dict(profile)
+@router.post("/import-csv")
+def bulk_import_donors_csv(file: UploadFile = File(...), hospital_id: Optional[str] = None, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Bulk ingests donor organ datasets from a CSV file for approved hospitals or Root Organizer."""
+    if user.role not in ("HOSPITAL", "ROOT"):
+        raise HTTPException(status_code=403, detail="Access denied.")
 
+    hospital = None
+    if user.role == "HOSPITAL":
+        hospital = db.query(HospitalProfile).filter(HospitalProfile.user_id == user.id).first()
+        if not hospital or hospital.status != "APPROVED":
+            raise HTTPException(status_code=403, detail="Hospital account must be APPROVED to upload CSV donor datasets.")
+    else:
+        if hospital_id:
+            hospital = db.query(HospitalProfile).filter(HospitalProfile.id == hospital_id).first()
+        if not hospital:
+            hospital = db.query(HospitalProfile).filter(HospitalProfile.status == "APPROVED").first()
+        if not hospital:
+            raise HTTPException(status_code=400, detail="No approved hospital exists yet to attach CSV dataset.")
 
-@router.get("/me/status")
-def get_my_status(user: User = Depends(require_role("donor")), db: Session = Depends(get_db)):
-    profile = db.query(DonorProfile).filter(DonorProfile.user_id == user.id).first()
-    if not profile:
-        raise HTTPException(404, "No donor profile yet.")
-    return {"availability_status": profile.availability_status, "donation_status": profile.donation_status,
-            "verification_status": profile.verification_status,
-            "has_hospital_link": bool(profile.hospital_id), "has_medical_document": bool(profile.medical_document_id)}
+    if not file.filename.endswith(".csv"):
+        raise HTTPException(status_code=400, detail="Uploaded file must be a CSV format file (.csv).")
 
+    contents = file.file.read().decode("utf-8-sig")
+    reader = csv.DictReader(io.StringIO(contents))
 
-@router.post("/me/availability")
-def set_availability(active: bool, user: User = Depends(require_role("donor")), db: Session = Depends(get_db)):
-    profile = db.query(DonorProfile).filter(DonorProfile.user_id == user.id).first()
-    if not profile:
-        raise HTTPException(404, "No donor profile yet.")
-    profile.availability_status = "active" if active else "inactive"
-    if not active and profile.donation_status == "ACTIVE":
-        profile.donation_status = "INACTIVE"
-    elif active and profile.donation_status == "INACTIVE":
-        profile.donation_status = "ACTIVE"
-    db.commit()
-    log_action(db, "DONOR_AVAILABILITY_CHANGED", user_id=user.id, target=profile.availability_status)
-    return {"availability_status": profile.availability_status, "donation_status": profile.donation_status}
+    imported_count = 0
+    errors = []
 
+    for idx, row in enumerate(reader, start=1):
+        try:
+            organ = row.get("organ_type") or row.get("organ") or row.get("Organ")
+            blood = row.get("blood_group") or row.get("blood") or row.get("BloodGroup")
+            if not organ or not blood:
+                continue
 
-@router.get("/me/documents")
-def my_documents(user: User = Depends(require_role("donor")), db: Session = Depends(get_db)):
-    docs = db.query(Document).filter(Document.owner_user_id == user.id).order_by(Document.uploaded_at.desc()).all()
-    return to_dict_list(docs)
-
-
-@router.patch("/{donor_id}/status")
-def update_donation_status(donor_id: str, body: DonationStatusIn,
-                           user: User = Depends(require_role("doctor", "hospital", "organizer")),
-                           db: Session = Depends(get_db)):
-    status = body.status.upper()
-    if status not in DONATION_STATUSES:
-        raise HTTPException(400, f"status must be one of: {', '.join(sorted(DONATION_STATUSES))}")
-    profile = db.query(DonorProfile).filter(DonorProfile.id == donor_id).first()
-    if not profile:
-        raise HTTPException(404, "Donor not found.")
-    profile.donation_status = status
-    if status == "INACTIVE":
-        profile.availability_status = "inactive"
-    elif status in {"ACTIVE", "UNDER REVIEW", "MATCHED", "DONATION IN PROCESS"}:
-        profile.availability_status = "active"
-    db.commit()
-    log_action(db, "DONOR_DONATION_STATUS_CHANGED", user_id=user.id, target=donor_id, meta={"status": status})
-    return {"donor_id": donor_id, "donation_status": status, "availability_status": profile.availability_status}
-
-
-_DONOR_PII_FIELDS = {"medical_information", "phone", "address", "date_of_birth", "gender", "user_id", "medical_document_id", "hla_a", "hla_b", "hla_c", "hla_dr", "hla_dq"}
-
-
-def _donor_search_result(d: DonorProfile, db: Session) -> dict:
-    """What a requesting hospital/doctor is allowed to see about a donor
-    candidate: compatibility-relevant fields only -- never the donor's own
-    phone, address, date of birth, or gender. If the donor registered
-    through a hospital, that hospital's contact details are surfaced
-    instead so the requesting hospital coordinates hospital-to-hospital,
-    never hospital-to-individual-donor directly."""
-    out = to_dict(d, exclude=_DONOR_PII_FIELDS)
-    out["associated_hospital"] = None
-    if d.hospital_id:
-        h = db.query(HospitalProfile).filter(HospitalProfile.id == d.hospital_id).first()
-        if h:
-            out["associated_hospital"] = {
-                "hospital_id": h.id, "hospital_name": h.hospital_name,
-                "phone": h.phone, "address": h.address, "location": h.location,
-                "authorized_contact": h.authorized_contact,
-            }
-    return out
-
-
-@router.get("/search")
-def search_donors(organ: Optional[str] = None, blood_group: Optional[str] = None,
-                 page: int = 1, page_size: int = DEFAULT_PAGE_SIZE,
-                 user: User = Depends(require_role("doctor", "hospital", "organizer")),
-                 db: Session = Depends(get_db)):
-    page, page_size = bounded_page(page, page_size)
-    q = db.query(DonorProfile).filter(DonorProfile.availability_status == "active",
-                                       DonorProfile.verification_status == "verified")
-    if blood_group:
-        q = q.filter(DonorProfile.blood_group == blood_group.upper())
-    if organ:
-        # organs_available is a JSON column, so this filter can't run in SQL
-        # portably across SQLite/Postgres -- bounded pre-fetch keeps this
-        # from ever loading an unbounded table into memory.
-        candidates = q.limit(2000).all()
-        results = [d for d in candidates if any(o.replace("_partial", "") == organ.lower() for o in (d.organs_available or []))]
-        total = len(results)
-        page_items = results[(page - 1) * page_size: page * page_size]
-        return {"items": [_donor_search_result(d, db) for d in page_items], "page": page, "page_size": page_size, "total": total, "pages": (total + page_size - 1) // page_size}
-    paginated = paginate(q, page, page_size)
-    return {**paginated, "items": [_donor_search_result(d, db) for d in paginated["items"]]}
-
-
-@router.post("/import")
-async def import_donors_csv(file: UploadFile = File(...), hospital_id: Optional[str] = None,
-                             user: User = Depends(require_role("doctor", "hospital", "organizer")),
-                             db: Session = Depends(get_db)):
-    """Bulk-import a donor dataset from a CSV file. Deliberately not
-    available to the donor role -- this creates OTHER people's records in
-    bulk, which is an operational/administrative action, not something a
-    donor account should be able to do to itself or others.
-
-    Every imported donor is associated with a hospital, same as an
-    individually-registered donor -- a hospital-role importer defaults to
-    their own hospital if hospital_id is omitted; a doctor/organizer must
-    supply one explicitly. This keeps the invariant that
-    /donors/search and match results always have a real hospital's
-    contact info to show instead of donor identity.
-
-    Expected columns (case-insensitive, extra columns ignored):
-    full_name, email, blood_group (required), organs_available (comma or
-    semicolon separated, e.g. "kidney;liver"), hla_a, hla_b, hla_c, hla_dr,
-    hla_dq, phone, address, date_of_birth, gender.
-
-    Every row shares one bcrypt hash for its placeholder login password --
-    hashing per-row was the exact bug that made seed_donors.py take
-    unreasonably long for a dataset this size; this avoids repeating it.
-    """
-    if user.role == "hospital" and not hospital_id:
-        own_hospital = db.query(HospitalProfile).filter(HospitalProfile.user_id == user.id).first()
-        hospital_id = own_hospital.id if own_hospital else None
-    if not hospital_id:
-        raise HTTPException(400, "hospital_id is required for import (a hospital-role user may omit it to default to their own hospital).")
-    hospital = db.query(HospitalProfile).filter(HospitalProfile.id == hospital_id).first()
-    if not hospital or hospital.verification_status.lower() not in {"verified", "approved"}:
-        raise HTTPException(400, "hospital_id must reference an organizer-verified hospital.")
-    if user.role == "hospital" and hospital.user_id != user.id:
-        raise HTTPException(403, "You can only import donors under your own hospital.")
-
-    if not (file.filename or "").lower().endswith(".csv"):
-        raise HTTPException(400, "Only .csv files are accepted.")
-    raw = await file.read(10 * 1024 * 1024 + 1)
-    if len(raw) > 10 * 1024 * 1024:
-        raise HTTPException(413, "Import file exceeds the 10 MB limit.")
-    try:
-        text = raw.decode("utf-8-sig")
-    except UnicodeDecodeError:
-        raise HTTPException(400, "File must be UTF-8 encoded CSV.")
-
-    reader = csv.DictReader(io.StringIO(text))
-    if reader.fieldnames is None:
-        raise HTTPException(400, "CSV has no header row.")
-    fieldmap = {name.strip().lower(): name for name in reader.fieldnames}
-    if "blood_group" not in fieldmap:
-        raise HTTPException(400, "CSV must include a \'blood_group\' column.")
-
-    rows = list(reader)
-    if len(rows) > MAX_IMPORT_ROWS:
-        raise HTTPException(400, f"Import capped at {MAX_IMPORT_ROWS} rows per file; split into multiple imports.")
-
-    shared_password_hash = hash_password(uuid.uuid4().hex)  # random, unusable placeholder -- these accounts are records, not logins anyone is meant to use directly
-    created, skipped = 0, []
-
-    for i, row in enumerate(rows, start=2):  # start=2: row 1 is the header
-        def get(col):
-            key = fieldmap.get(col)
-            return (row.get(key) or "").strip() if key else ""
-
-        blood_group = get("blood_group").upper()
-        if blood_group not in VALID_BLOOD_GROUPS:
-            skipped.append({"row": i, "reason": f"invalid or missing blood_group: {blood_group!r}"})
-            continue
-
-        email = get("email") or f"import-{uuid.uuid4().hex[:12]}@donors.qtransplant.local"
-        if db.query(User).filter(User.email == email).first():
-            skipped.append({"row": i, "reason": f"email already exists: {email}"})
-            continue
-
-        organs_raw = get("organs_available")
-        organs = [o.strip().lower() for o in organs_raw.replace(";", ",").split(",") if o.strip()]
-
-        u = User(email=email, hashed_password=shared_password_hash, role="donor",
-                  full_name=get("full_name") or "Imported Donor", status="active", email_verified=True)
-        db.add(u)
-        db.flush()
-        db.add(DonorProfile(
-            user_id=u.id, blood_group=blood_group, organs_available=organs,
-            date_of_birth=get("date_of_birth") or None, gender=get("gender") or None,
-            phone=get("phone") or None, address=get("address") or None,
-            hla_a=get("hla_a") or None, hla_b=get("hla_b") or None, hla_c=get("hla_c") or None,
-            hla_dr=get("hla_dr") or None, hla_dq=get("hla_dq") or None,
-            availability_status="active", donation_status="ACTIVE", verification_status="pending",
-            hospital_id=hospital_id,
-        ))
-        created += 1
+            donor = Donor(
+                hospital_id=hospital.id,
+                organ_type=str(organ).strip().capitalize(),
+                blood_group=str(blood).strip().upper(),
+                rh_factor=str(row.get("rh_factor", "+")).strip(),
+                hla_a=str(row.get("hla_a", "")).strip() or None,
+                hla_b=str(row.get("hla_b", "")).strip() or None,
+                hla_c=str(row.get("hla_c", "")).strip() or None,
+                hla_dr=str(row.get("hla_dr", "")).strip() or None,
+                hla_dq=str(row.get("hla_dq", "")).strip() or None,
+                age=int(row.get("age", 35)) if row.get("age") else 35,
+                gender=str(row.get("gender", "M")).strip(),
+                health_status=str(row.get("health_status", "Optimal")).strip(),
+                viability_hours_remaining=float(row.get("viability_hours_remaining", 24.0)) if row.get("viability_hours_remaining") else 24.0
+            )
+            db.add(donor)
+            imported_count += 1
+        except Exception as e:
+            errors.append(f"Row {idx}: {str(e)}")
 
     db.commit()
-    log_action(db, "DONORS_IMPORTED", user_id=user.id, meta={"created": created, "skipped": len(skipped), "rows": len(rows), "hospital_id": hospital_id})
-    return {"rows_processed": len(rows), "created": created, "skipped_count": len(skipped), "skipped": skipped[:50]}
 
+    audit = AuditLog(
+        user_id=user.id,
+        action="BULK_CSV_DONORS_IMPORTED",
+        target=hospital.id,
+        meta={"imported_count": imported_count, "hospital_name": hospital.hospital_name}
+    )
+    db.add(audit)
+    db.commit()
 
-@router.get("/{donor_id}")
-def get_donor(donor_id: str, user: User = Depends(require_role("doctor", "hospital", "organizer")),
-              db: Session = Depends(get_db)):
-    """Drill-down detail for a single donor found via search -- same
-    minimum-necessary shape as /search (no donor phone/address/DOB/gender;
-    the registering hospital's contact info in its place). Organizer can
-    look up any donor for admin/review purposes; doctor/hospital can only
-    look up donors that are actually verified and active, i.e. the same
-    set /donors/search would have shown them in the first place.
-    Registered last in this file (after /me, /search, /import) so those
-    literal paths are never shadowed by this catch-all path parameter."""
-    d = db.query(DonorProfile).filter(DonorProfile.id == donor_id).first()
-    if not d:
-        raise HTTPException(404, "Donor not found.")
-    if user.role != "organizer" and (d.availability_status != "active" or d.verification_status != "verified"):
-        raise HTTPException(404, "Donor not found.")
-    return _donor_search_result(d, db)
+    return {
+        "status": "SUCCESS",
+        "imported_count": imported_count,
+        "errors": errors[:5],
+        "message": f"Successfully ingested {imported_count} donor records into unified dataset for {hospital.hospital_name}!"
+    }
+
+@router.get("/my-donors")
+def get_my_hospital_donors(user: User = Depends(require_role("HOSPITAL")), db: Session = Depends(get_db)):
+    """Returns list of donors registered by the currently logged-in hospital."""
+    hospital = db.query(HospitalProfile).filter(HospitalProfile.user_id == user.id).first()
+    if not hospital:
+        return []
+    donors = db.query(Donor).filter(Donor.hospital_id == hospital.id).order_by(Donor.created_at.desc()).all()
+    return donors
+
+@router.get("/all")
+def get_all_global_donors(user: User = Depends(require_role("ROOT")), db: Session = Depends(get_db)):
+    """Returns total donor pool across all hospitals (Root Organizer overview)."""
+    donors = db.query(Donor).order_by(Donor.created_at.desc()).all()
+    return donors

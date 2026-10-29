@@ -1,136 +1,91 @@
-import json
+"""Documents Storage & Certificate Upload Router for Q-Transplant v2."""
 import uuid
+import os
 from pathlib import Path
 from fastapi import APIRouter, Depends, File, UploadFile, HTTPException
-from fastapi.responses import FileResponse, RedirectResponse
+from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
+
 from app.database import get_db
-from app.models import User, Document, DoctorProfile, HospitalProfile, DonorProfile
-from app.security import get_current_user, rate_limit_by_user
-from app.config import settings
-from app.services.audit import log_action
-from app.services.identity_verification import verify_identity_photos
-from app.services import object_storage
-from app.services.notifications import notify_organizer
-from app.utils import to_dict, to_dict_list
+from app.models import User, Document
+from app.security import get_current_user
+from app.config import settings, BASE_DIR
 
 router = APIRouter(prefix="/api/v1/documents", tags=["documents"])
-ALLOWED = {"pdf", "png", "jpg", "jpeg"}
-MAX_BYTES = 10 * 1024 * 1024
-_MEDIA_TYPES = {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg", "pdf": "application/pdf"}
-# kind values the frontend can send, normalized to what gets linked where
-_DONOR_MEDICAL_KINDS = {"medical_document", "medical_report", "medical_certificate"}
-_PHOTO_KINDS = {"photo", "live_photo", "selfie"}
-_CERT_KINDS = {"certificate", "license", "license_certificate"}
 
+ALLOWED_EXT = {"pdf", "png", "jpg", "jpeg", "doc", "docx"}
+MAX_BYTES = 15 * 1024 * 1024 # 15 MB
+DOCS_DIR = os.path.join(BASE_DIR, "uploads")
 
-def _run_identity_check_if_ready(db: Session, profile: DoctorProfile):
-    if not (profile.photo_document_id and profile.certificate_document_id):
-        return
-    photo = db.query(Document).filter(Document.id == profile.photo_document_id).first()
-    cert = db.query(Document).filter(Document.id == profile.certificate_document_id).first()
-    if not photo or not cert:
-        return
-    photo_ext = Path(photo.filename).suffix.lstrip(".").lower()
-    cert_ext = Path(cert.filename).suffix.lstrip(".").lower()
-    if cert_ext == "pdf" or photo_ext == "pdf":
-        # The comparison model takes images, not PDFs — skip automatically
-        # and let the organizer compare visually instead.
-        result = {"status": "not_run", "same_person_likely": None, "confidence": "unknown",
-                  "reasoning": "The certificate was submitted as a PDF — automated photo comparison needs an image. An organizer must review it manually."}
-    else:
-        result = verify_identity_photos(
-            object_storage.read(photo.storage_path), _MEDIA_TYPES[photo_ext],
-            object_storage.read(cert.storage_path), _MEDIA_TYPES[cert_ext],
-        )
-    profile.identity_check_result = json.dumps(result)
-    profile.identity_check_confidence = result.get("confidence", "unknown")
+os.makedirs(DOCS_DIR, exist_ok=True)
+
+@router.post("/public-upload")
+def public_upload_document(file: UploadFile = File(...), kind: str = "registration_doc"):
+    """Public upload endpoint for Doctor Aadhaar & Govt Accreditation files during registration."""
+    ext = Path(file.filename).suffix.lstrip(".").lower()
+    if ext not in ALLOWED_EXT:
+        raise HTTPException(status_code=400, detail=f"File extension '.{ext}' is not allowed. Supported formats: {', '.join(ALLOWED_EXT)}")
+
+    file_id = str(uuid.uuid4())
+    stored_name = f"{file_id}.{ext}"
+    storage_path = os.path.join(DOCS_DIR, stored_name)
+
+    contents = file.file.read()
+    if len(contents) > MAX_BYTES:
+        raise HTTPException(status_code=400, detail="File size exceeds maximum 15MB limit.")
+
+    with open(storage_path, "wb") as f:
+        f.write(contents)
+
+    file_url = f"/uploads/{stored_name}"
+    return {
+        "filename": file.filename,
+        "kind": kind,
+        "url": file_url,
+        "stored_name": stored_name
+    }
+
+@router.post("/upload")
+def upload_document(file: UploadFile = File(...), kind: str = "certificate", user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Uploads a document (government certificate, accreditation proof, or medical document)."""
+    ext = Path(file.filename).suffix.lstrip(".").lower()
+    if ext not in ALLOWED_EXT:
+        raise HTTPException(status_code=400, detail=f"File extension '.{ext}' is not allowed. Supported: {', '.join(ALLOWED_EXT)}")
+
+    file_id = str(uuid.uuid4())
+    stored_name = f"{file_id}.{ext}"
+    storage_path = os.path.join(DOCS_DIR, stored_name)
+
+    contents = file.file.read()
+    if len(contents) > MAX_BYTES:
+        raise HTTPException(status_code=400, detail="File size exceeds maximum 15MB limit.")
+
+    with open(storage_path, "wb") as f:
+        f.write(contents)
+
+    doc = Document(
+        id=file_id,
+        owner_user_id=user.id,
+        kind=kind,
+        filename=file.filename,
+        storage_path=storage_path,
+        verification_status="verified"
+    )
+    db.add(doc)
     db.commit()
 
-    doctor_user = db.query(User).filter(User.id == profile.user_id).first()
-    name = doctor_user.full_name if doctor_user else "A doctor"
-    if result.get("status") == "completed":
-        if result.get("same_person_likely") is True:
-            verdict = f"AI check: the live photo and certificate photo APPEAR TO BE THE SAME PERSON (confidence: {result.get('confidence')})."
-        elif result.get("same_person_likely") is False:
-            verdict = f"AI check: the live photo and certificate photo DO NOT APPEAR TO MATCH (confidence: {result.get('confidence')}) — please review closely, this may indicate a fraudulent submission."
-        else:
-            verdict = "AI check: could not clearly determine a match from the submitted photos — manual review needed."
-        detail = f"{verdict} Reasoning: {result.get('reasoning', '')}"
-    else:
-        detail = f"AI identity check did not run ({result.get('reasoning', result.get('status'))}) — please compare the two submitted photos manually."
-    notify_organizer("Q-Transplant — doctor documents ready for review",
-                      f"{name}'s license and live photo are both uploaded and ready for approval. {detail}")
+    file_url = f"/api/v1/documents/{file_id}/download"
+    return {
+        "id": doc.id,
+        "filename": doc.filename,
+        "kind": doc.kind,
+        "url": file_url
+    }
 
-
-@router.post("")
-async def upload_document(kind: str, file: UploadFile = File(...),
-                           user: User = Depends(rate_limit_by_user("document_upload", settings.UPLOAD_RATE_LIMIT, settings.RATE_LIMIT_WINDOW_MINUTES)),
-                           db: Session = Depends(get_db)):
-    ext = Path(file.filename or "").suffix.lower().lstrip(".")
-    if ext not in ALLOWED:
-        raise HTTPException(400, "Only PDF, PNG and JPEG documents are allowed.")
-    data = await file.read(MAX_BYTES + 1)
-    if len(data) > MAX_BYTES:
-        raise HTTPException(413, "Document exceeds the 10 MB limit.")
-    key = f"{user.id}/{uuid.uuid4().hex}.{ext}"
-    storage_ref = object_storage.save(key, data, _MEDIA_TYPES.get(ext, "application/octet-stream"))
-    doc = Document(owner_user_id=user.id, kind=kind, filename=file.filename or key, storage_path=storage_ref)
-    db.add(doc); db.commit(); db.refresh(doc)
-    log_action(db, "DOCUMENT_UPLOADED", user_id=user.id, target=doc.id, meta={"kind": kind, "storage": "s3" if object_storage.is_configured() else "local"})
-
-    # Auto-link to the owning profile so the organizer approval check
-    # (which requires both IDs to be set) can ever actually be satisfied.
-    if user.role == "doctor" and kind in (_PHOTO_KINDS | _CERT_KINDS):
-        profile = db.query(DoctorProfile).filter(DoctorProfile.user_id == user.id).first()
-        if profile:
-            if kind in _PHOTO_KINDS:
-                profile.photo_document_id = doc.id
-            else:
-                profile.certificate_document_id = doc.id
-            db.commit()
-            _run_identity_check_if_ready(db, profile)
-    elif user.role == "hospital" and kind in _CERT_KINDS:
-        profile = db.query(HospitalProfile).filter(HospitalProfile.user_id == user.id).first()
-        if profile:
-            profile.license_document_id = doc.id
-            db.commit()
-    elif user.role == "donor" and kind in _DONOR_MEDICAL_KINDS:
-        profile = db.query(DonorProfile).filter(DonorProfile.user_id == user.id).first()
-        if profile:
-            profile.medical_document_id = doc.id
-            if profile.verification_status == "pending":
-                profile.verification_status = "under_review"
-            db.commit()
-            notify_organizer("Q-Transplant — donor medical document ready for review",
-                              f"{user.full_name or user.email} uploaded a medical document and is awaiting verification before appearing in donor search results.")
-
-    return to_dict(doc)
-
-@router.get("/me")
-def my_documents(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    return to_dict_list(db.query(Document).filter(Document.owner_user_id == user.id).order_by(Document.uploaded_at.desc()).all())
-
-@router.get("/{document_id}")
-def document_metadata(document_id: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+@router.get("/{document_id}/download")
+def download_document(document_id: str, db: Session = Depends(get_db)):
+    """Downloads/views an uploaded document."""
     doc = db.query(Document).filter(Document.id == document_id).first()
-    if not doc:
-        raise HTTPException(404, "Document not found.")
-    if doc.owner_user_id != user.id and user.role != "organizer":
-        raise HTTPException(403, "Not authorized to access this document.")
-    return to_dict(doc)
-
-@router.get("/{document_id}/file")
-def document_file(document_id: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    doc = db.query(Document).filter(Document.id == document_id).first()
-    if not doc:
-        raise HTTPException(404, "Document not found.")
-    if doc.owner_user_id != user.id and user.role != "organizer":
-        raise HTTPException(403, "Not authorized to access this document.")
-    url = object_storage.presigned_url(doc.storage_path)
-    if url:
-        return RedirectResponse(url)
-    if not object_storage.exists(doc.storage_path):
-        raise HTTPException(404, "Stored file is missing.")
-    ext = Path(doc.filename).suffix.lstrip(".").lower()
-    return FileResponse(doc.storage_path, media_type=_MEDIA_TYPES.get(ext, "application/octet-stream"), filename=doc.filename)
+    if not doc or not os.path.exists(doc.storage_path):
+        raise HTTPException(status_code=404, detail="Document not found.")
+    return FileResponse(doc.storage_path, filename=doc.filename)

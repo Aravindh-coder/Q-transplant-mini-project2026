@@ -1,50 +1,154 @@
-"""Q-Transplant relational database models."""
+"""Q-Transplant v4 relational database models."""
 import uuid
 from datetime import datetime, timezone
-from sqlalchemy import Column,String,DateTime,Boolean,Float,Integer,ForeignKey,Text,JSON,Index
+from sqlalchemy import Column, String, DateTime, Boolean, Float, Integer, ForeignKey, Text, JSON, Index
 from app.database import Base
 
 def uid(): return str(uuid.uuid4())
 def now(): return datetime.now(timezone.utc)
+
 class User(Base):
-    __tablename__="users"; id=Column(String,primary_key=True,default=uid); email=Column(String,unique=True,index=True,nullable=False); hashed_password=Column(String,nullable=False); role=Column(String,index=True,nullable=False); full_name=Column(String,nullable=False); status=Column(String,index=True,default="active"); email_verified=Column(Boolean,default=False,index=True); created_at=Column(DateTime,index=True,default=now)
-class OTP(Base):
-    __tablename__="otps"; id=Column(String,primary_key=True,default=uid); email=Column(String,index=True,nullable=False); code_hash=Column(String,nullable=False); purpose=Column(String,index=True,default="password_reset"); expires_at=Column(DateTime,index=True,nullable=False); used=Column(Boolean,index=True,default=False); created_at=Column(DateTime,index=True,default=now)
+    __tablename__ = "users"
+    id = Column(String, primary_key=True, default=uid)
+    email = Column(String, unique=True, index=True, nullable=False)
+    hashed_password = Column(String, nullable=False)
+    role = Column(String, index=True, nullable=False)  # "ROOT" or "HOSPITAL"
+    full_name = Column(String, nullable=False)
+    status = Column(String, index=True, default="active")
+    created_at = Column(DateTime, index=True, default=now)
+
 class RevokedToken(Base):
-    __tablename__="revoked_tokens"; id=Column(String,primary_key=True,default=uid); token_jti=Column(String,unique=True,index=True,nullable=False); expires_at=Column(DateTime,index=True,nullable=False); created_at=Column(DateTime,default=now)
-class DonorProfile(Base):
-    __tablename__="donor_profiles"; id=Column(String,primary_key=True,default=uid); user_id=Column(String,ForeignKey("users.id"),unique=True,index=True,nullable=False); date_of_birth=Column(String); gender=Column(String); phone=Column(String); address=Column(String); blood_group=Column(String,nullable=False,index=True); organs_available=Column(JSON,default=list); hla_a=Column(String); hla_b=Column(String); hla_c=Column(String); hla_dr=Column(String); hla_dq=Column(String); medical_information=Column(Text); availability_status=Column(String,index=True,default="active"); donation_status=Column(String,index=True,default="ACTIVE"); hospital_id=Column(String,ForeignKey("hospital_profiles.id"),index=True); medical_document_id=Column(String,ForeignKey("documents.id"),index=True); verification_status=Column(String,index=True,default="pending"); created_at=Column(DateTime,default=now); updated_at=Column(DateTime,default=now,onupdate=now)
-class DoctorProfile(Base):
-    __tablename__="doctor_profiles"; id=Column(String,primary_key=True,default=uid); user_id=Column(String,ForeignKey("users.id"),unique=True,index=True,nullable=False); phone=Column(String,nullable=False); address=Column(String,nullable=False); license_number=Column(String,index=True,nullable=False); specialty=Column(String,nullable=False); professional_information=Column(Text,nullable=False); photo_document_id=Column(String,ForeignKey("documents.id"),index=True); certificate_document_id=Column(String,ForeignKey("documents.id"),index=True); hospital_id=Column(String,ForeignKey("hospital_profiles.id"),index=True); approval_status=Column(String,index=True,default="PENDING_APPROVAL"); identity_check_result=Column(Text); identity_check_confidence=Column(String); created_at=Column(DateTime,default=now)
+    __tablename__ = "revoked_tokens"
+    id = Column(String, primary_key=True, default=uid)
+    token_jti = Column(String, unique=True, index=True, nullable=False)
+    expires_at = Column(DateTime, index=True, nullable=False)
+    created_at = Column(DateTime, default=now)
+
 class HospitalProfile(Base):
-    __tablename__="hospital_profiles"; id=Column(String,primary_key=True,default=uid); user_id=Column(String,ForeignKey("users.id"),unique=True,index=True,nullable=False); hospital_name=Column(String,nullable=False); hospital_code=Column(String,unique=True,index=True,nullable=False); phone=Column(String,nullable=False); address=Column(String,nullable=False); location=Column(String,nullable=False); registration_number=Column(String,nullable=False); authorized_contact=Column(String,nullable=False); license_document_id=Column(String,ForeignKey("documents.id"),index=True); verification_status=Column(String,index=True,default="pending"); created_at=Column(DateTime,default=now)
-class HospitalDoctor(Base):
-    __tablename__="hospital_doctors"; id=Column(String,primary_key=True,default=uid); hospital_id=Column(String,ForeignKey("hospital_profiles.id"),index=True,nullable=False); doctor_id=Column(String,ForeignKey("doctor_profiles.id"),index=True,nullable=False); status=Column(String,index=True,default="active"); created_at=Column(DateTime,default=now); __table_args__=(Index("ix_hospital_doctor_unique","hospital_id","doctor_id",unique=True),)
-class Patient(Base):
-    __tablename__="patients"; id=Column(String,primary_key=True,default=uid); hospital_id=Column(String,ForeignKey("hospital_profiles.id"),index=True,nullable=False); doctor_id=Column(String,ForeignKey("doctor_profiles.id"),index=True,nullable=False); full_name=Column(String,nullable=False); age=Column(Integer); gender=Column(String); blood_group=Column(String,nullable=False,index=True); required_organ=Column(String,nullable=False,index=True); hla_a=Column(String); hla_b=Column(String); hla_c=Column(String); hla_dr=Column(String); hla_dq=Column(String); urgency=Column(String,index=True,default="MEDIUM"); waiting_since=Column(DateTime,default=now); waitlist_status=Column(String,index=True,default="waiting"); priority_score=Column(Float,default=0.0); created_at=Column(DateTime,index=True,default=now); updated_at=Column(DateTime,default=now,onupdate=now)
-class Organ(Base):
-    __tablename__="organs"; id=Column(String,primary_key=True,default=uid); name=Column(String,index=True,unique=True,nullable=False); description=Column(Text)
-class MedicalRecord(Base):
-    __tablename__="medical_records"; id=Column(String,primary_key=True,default=uid); patient_id=Column(String,ForeignKey("patients.id"),index=True,nullable=False); recorded_by=Column(String,ForeignKey("users.id"),index=True,nullable=False); record_type=Column(String,index=True,nullable=False); content=Column(Text,nullable=False); created_at=Column(DateTime,index=True,default=now)
-class HLAProfile(Base):
-    __tablename__="hla_profiles"; id=Column(String,primary_key=True,default=uid); user_id=Column(String,ForeignKey("users.id"),index=True); patient_id=Column(String,ForeignKey("patients.id"),index=True); hla_a=Column(String); hla_b=Column(String); hla_c=Column(String); hla_dr=Column(String); hla_dq=Column(String); created_at=Column(DateTime,default=now)
-class TransplantCase(Base):
-    __tablename__="transplant_cases"; id=Column(String,primary_key=True,default=uid); patient_id=Column(String,ForeignKey("patients.id"),index=True,nullable=False); hospital_id=Column(String,ForeignKey("hospital_profiles.id"),index=True,nullable=False); donor_id=Column(String,ForeignKey("donor_profiles.id"),index=True); stage=Column(String,index=True,default="CREATED"); created_at=Column(DateTime,index=True,default=now); updated_at=Column(DateTime,default=now,onupdate=now)
-class MatchRequest(Base):
-    __tablename__="match_requests"; id=Column(String,primary_key=True,default=uid); patient_id=Column(String,ForeignKey("patients.id"),index=True,nullable=False); requested_by=Column(String,ForeignKey("users.id"),index=True,nullable=False); organ=Column(String,index=True,nullable=False); status=Column(String,index=True,default="pending"); created_at=Column(DateTime,index=True,default=now)
-class MatchResult(Base):
-    __tablename__="match_results"; id=Column(String,primary_key=True,default=uid); match_request_id=Column(String,ForeignKey("match_requests.id"),index=True,nullable=False); donor_id=Column(String,ForeignKey("donor_profiles.id"),index=True,nullable=False); blood_compatible=Column(Boolean,nullable=False); hla_score=Column(Float,nullable=False); organ_compatible=Column(Boolean,nullable=False); urgency_at_match=Column(String,index=True,nullable=False); overall_score=Column(Float,index=True,nullable=False); explanation=Column(JSON,default=dict); rank=Column(Integer,index=True,nullable=False); created_at=Column(DateTime,index=True,default=now)
-class EmergencyRequest(Base):
-    __tablename__="emergency_requests"; id=Column(String,primary_key=True,default=uid); hospital_id=Column(String,ForeignKey("hospital_profiles.id"),index=True,nullable=False); raised_by=Column(String,ForeignKey("users.id"),index=True); requirement=Column(String); status=Column(String,index=True,default="CREATED"); responding_hospital_id=Column(String,ForeignKey("hospital_profiles.id"),index=True); created_at=Column(DateTime,index=True,default=now); resolved_at=Column(DateTime)
-class Notification(Base):
-    __tablename__="notifications"; id=Column(String,primary_key=True,default=uid); recipient_user_id=Column(String,ForeignKey("users.id"),index=True,nullable=False); type=Column(String,index=True,nullable=False); title=Column(String,nullable=False); message=Column(Text,nullable=False); priority=Column(String,index=True,default="normal"); read=Column(Boolean,index=True,default=False); created_at=Column(DateTime,index=True,default=now)
+    __tablename__ = "hospital_profiles"
+    id = Column(String, primary_key=True, default=uid)
+    user_id = Column(String, ForeignKey("users.id"), unique=True, index=True, nullable=False)
+    hospital_name = Column(String, nullable=False, index=True)
+    registration_number = Column(String, unique=True, index=True, nullable=False)
+    state = Column(String, nullable=False)
+    address = Column(String, nullable=False)
+    contact_email = Column(String, nullable=False)
+    reception_phone = Column(String, nullable=False)
+    doctor_name = Column(String, nullable=False)
+    doctor_phone = Column(String, nullable=True)
+    doctor_aadhaar_masked = Column(String, nullable=False)
+    doctor_aadhaar_doc_url = Column(String, nullable=True)
+    aadhaar_verified = Column(Boolean, default=True)
+    gov_certificate_url = Column(String, nullable=False)
+    status = Column(String, index=True, default="PENDING_APPROVAL")  # PENDING_APPROVAL, APPROVED, REJECTED
+    rejection_reason = Column(Text, nullable=True)
+    # GIS Coordinates for transport-time calculation
+    latitude = Column(Float, nullable=True)
+    longitude = Column(Float, nullable=True)
+    created_at = Column(DateTime, index=True, default=now)
+
+class Donor(Base):
+    __tablename__ = "donors"
+    id = Column(String, primary_key=True, default=uid)
+    hospital_id = Column(String, ForeignKey("hospital_profiles.id"), index=True, nullable=False)
+    organ_type = Column(String, nullable=False, index=True)
+    blood_group = Column(String, nullable=False, index=True)
+    rh_factor = Column(String, default="+")
+    hla_a = Column(String, nullable=True)
+    hla_b = Column(String, nullable=True)
+    hla_c = Column(String, nullable=True)
+    hla_dr = Column(String, nullable=True)
+    hla_dq = Column(String, nullable=True)
+    age = Column(Integer, nullable=True)
+    gender = Column(String, nullable=True)
+    health_status = Column(String, default="Optimal")
+    viability_hours_remaining = Column(Float, default=24.0)
+    # NEW: track when donor was uploaded so viability decays in real-time
+    uploaded_at = Column(DateTime, index=True, default=now)
+    # NEW: allocation lock — True once a hospital confirms they are proceeding
+    is_allocated = Column(Boolean, default=False)
+    allocated_to_hospital_id = Column(String, nullable=True)
+    created_at = Column(DateTime, index=True, default=now)
+
+class Recipient(Base):
+    """Patient on the organ waiting list, registered by a hospital."""
+    __tablename__ = "recipients"
+    id = Column(String, primary_key=True, default=uid)
+    hospital_id = Column(String, ForeignKey("hospital_profiles.id"), index=True, nullable=False)
+    # Patient identity kept anonymized inside the platform
+    patient_code = Column(String, nullable=False)  # e.g. PAT-AIIMS-001
+    organ_needed = Column(String, nullable=False, index=True)
+    blood_group = Column(String, nullable=False, index=True)
+    rh_factor = Column(String, default="+")
+    # Full HLA profile
+    hla_a = Column(String, nullable=True)
+    hla_b = Column(String, nullable=True)
+    hla_c = Column(String, nullable=True)
+    hla_dr = Column(String, nullable=True)
+    hla_dq = Column(String, nullable=True)
+    # Panel Reactive Antibody — sensitization level (0-100%)
+    pra_percentage = Column(Float, default=0.0)
+    urgency_level = Column(String, index=True, default="HIGH")  # CRITICAL, HIGH, MEDIUM
+    additional_notes = Column(Text, nullable=True)
+    status = Column(String, index=True, default="WAITING")  # WAITING, MATCHED, TRANSPLANTED
+    registered_at = Column(DateTime, index=True, default=now)
+
+class OrganRequest(Base):
+    __tablename__ = "organ_requests"
+    id = Column(String, primary_key=True, default=uid)
+    requesting_hospital_id = Column(String, ForeignKey("hospital_profiles.id"), index=True, nullable=False)
+    patient_name = Column(String, default="Anonymized Patient")
+    organ_type = Column(String, nullable=False, index=True)
+    blood_group = Column(String, nullable=False, index=True)
+    rh_factor = Column(String, default="+")
+    hla_a = Column(String, nullable=True)
+    hla_b = Column(String, nullable=True)
+    hla_c = Column(String, nullable=True)
+    hla_dr = Column(String, nullable=True)
+    hla_dq = Column(String, nullable=True)
+    urgency_level = Column(String, index=True, default="HIGH")
+    status = Column(String, index=True, default="OPEN")
+    created_at = Column(DateTime, index=True, default=now)
+    timeout_at = Column(DateTime, index=True, nullable=False)
+
+class AutonomousIncidentLog(Base):
+    __tablename__ = "autonomous_incident_logs"
+    id = Column(String, primary_key=True, default=uid)
+    request_id = Column(String, ForeignKey("organ_requests.id"), index=True, nullable=False)
+    requesting_hospital_name = Column(String, nullable=False)
+    matched_hospital_name = Column(String, nullable=False)
+    organ_type = Column(String, nullable=False)
+    match_efficiency_score = Column(Float, nullable=False)
+    triggered_at = Column(DateTime, index=True, default=now)
+    status = Column(String, default="DISPATCHED")
+
 class AuditLog(Base):
-    __tablename__="audit_logs"; id=Column(String,primary_key=True,default=uid); user_id=Column(String,ForeignKey("users.id"),index=True); action=Column(String,index=True,nullable=False); target=Column(String,index=True); meta=Column(JSON,default=dict); ip_address=Column(String); created_at=Column(DateTime,index=True,default=now)
+    __tablename__ = "audit_logs"
+    id = Column(String, primary_key=True, default=uid)
+    user_id = Column(String, ForeignKey("users.id"), index=True, nullable=True)
+    action = Column(String, index=True, nullable=False)
+    target = Column(String, index=True, nullable=True)
+    meta = Column(JSON, default=dict)
+    ip_address = Column(String, nullable=True)
+    created_at = Column(DateTime, index=True, default=now)
+
+class AuditLedgerBlock(Base):
+    """Persistent SHA-256 cryptographic audit ledger block."""
+    __tablename__ = "audit_ledger_blocks"
+    id = Column(String, primary_key=True, default=uid)
+    block_index = Column(Integer, unique=True, nullable=False)
+    action = Column(String, nullable=False)
+    details = Column(JSON, default=dict)
+    block_hash = Column(String, nullable=False)
+    previous_hash = Column(String, nullable=False)
+    timestamp = Column(Float, nullable=False)
+
 class Document(Base):
-    __tablename__="documents"; id=Column(String,primary_key=True,default=uid); owner_user_id=Column(String,ForeignKey("users.id"),index=True,nullable=False); kind=Column(String,index=True,nullable=False); filename=Column(String,nullable=False); storage_path=Column(String,nullable=False); verification_status=Column(String,index=True,default="pending"); uploaded_at=Column(DateTime,index=True,default=now)
-class MedicalDecision(Base):
-    __tablename__="medical_decisions"; id=Column(String,primary_key=True,default=uid); doctor_id=Column(String,ForeignKey("doctor_profiles.id"),index=True,nullable=False); patient_id=Column(String,ForeignKey("patients.id"),index=True,nullable=False); decision=Column(String,index=True,nullable=False); notes=Column(Text); created_at=Column(DateTime,index=True,default=now)
-class DonorRequest(Base):
-    __tablename__="donor_requests"; id=Column(String,primary_key=True,default=uid); donor_id=Column(String,ForeignKey("donor_profiles.id"),index=True,nullable=False); patient_id=Column(String,ForeignKey("patients.id"),index=True); requested_by=Column(String,ForeignKey("users.id"),index=True,nullable=False); organ=Column(String,index=True,nullable=False); urgency=Column(String,index=True,default="MEDIUM"); message=Column(Text); status=Column(String,index=True,default="pending"); created_at=Column(DateTime,index=True,default=now); responded_at=Column(DateTime)
-class Device(Base):
-    __tablename__="devices"; id=Column(String,primary_key=True,default=uid); hospital_id=Column(String,ForeignKey("hospital_profiles.id"),index=True,nullable=False); device_token_hash=Column(String,nullable=False); firmware_version=Column(String); last_seen=Column(DateTime); connection_status=Column(String,index=True,default="offline"); created_at=Column(DateTime,default=now)
+    __tablename__ = "documents"
+    id = Column(String, primary_key=True, default=uid)
+    owner_user_id = Column(String, ForeignKey("users.id"), index=True, nullable=False)
+    kind = Column(String, index=True, nullable=False)
+    filename = Column(String, nullable=False)
+    storage_path = Column(String, nullable=False)
+    verification_status = Column(String, index=True, default="pending")
+    uploaded_at = Column(DateTime, index=True, default=now)
