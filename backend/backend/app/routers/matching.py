@@ -33,7 +33,7 @@ class OrganMatchSearchIn(BaseModel):
     hla_dq: Optional[str] = None
     pra_percentage: Optional[float] = 0.0
     urgency_level: Optional[str] = "HIGH"
-    min_efficiency_percentage: Optional[float] = 30.0
+    min_efficiency_percentage: Optional[float] = 0.0
 
 
 class UrgentRequestIn(BaseModel):
@@ -109,7 +109,8 @@ def search_organ_matches(
             donor_state=holding_hospital.state,
             recipient_state=requesting_hospital.state if requesting_hospital else "",
         )
-        if not gis["is_viable"]:
+        # ROOT users (no hospital profile) bypass GIS viability check — show all viable donors
+        if requesting_hospital and not gis["is_viable"]:
             continue
 
         donor_spec = {

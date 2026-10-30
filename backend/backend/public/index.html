@@ -2173,8 +2173,8 @@
         const resHosp = await fetch(`${API_BASE}/organizer/pending-hospitals`, {
           headers: { "Authorization": `Bearer ${token}` }
         });
-        const pending = await resHosp.json();
-        renderPendingHospitals(pending);
+        const pending = resHosp.ok ? await resHosp.json() : [];
+        renderPendingHospitals(Array.isArray(pending) ? pending : []);
 
         const resDatasets = await fetch(`${API_BASE}/organizer/hospital-datasets`, {
           headers: { "Authorization": `Bearer ${token}` }
@@ -2187,8 +2187,8 @@
         const resLogs = await fetch(`${API_BASE}/organizer/failover-incidents`, {
           headers: { "Authorization": `Bearer ${token}` }
         });
-        const logs = await resLogs.json();
-        renderFailoverLogs(logs);
+        const logs = resLogs.ok ? await resLogs.json() : [];
+        renderFailoverLogs(Array.isArray(logs) ? logs : []);
 
         const resLedger = await fetch(`${API_BASE}/organizer/audit-ledger`, {
           headers: { "Authorization": `Bearer ${token}` }
@@ -2674,7 +2674,8 @@
 
     function renderPendingHospitals(list) {
       const tbody = document.getElementById("pendingHospitalsBody");
-      if (!list || list.length === 0) {
+      if (!tbody) return;
+      if (!list || !Array.isArray(list) || list.length === 0) {
         tbody.innerHTML = `<tr><td colspan="6" style="text-align: center; color: var(--text-muted);">No hospital applications currently pending verification.</td></tr>`;
         return;
       }

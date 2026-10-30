@@ -84,9 +84,17 @@ def compute_gis_adjusted_viability(
     Falls back to state-capital coordinates if exact lat/lon not available.
     Returns dict with distance_km, transport_hours, adjusted_viability_hours, is_viable.
     """
-    # Resolve coordinates
-    d_lat, d_lon = donor_lat, donor_lon
-    r_lat, r_lon = recipient_lat, recipient_lon
+    # If recipient info is completely unknown (e.g. ROOT user with no hospital),
+    # skip GIS entirely — return stored viability unchanged
+    no_recipient = (recipient_lat is None and recipient_lon is None and not (recipient_state or "").strip())
+    if no_recipient:
+        return {
+            "distance_km": None,
+            "transport_hours": None,
+            "adjusted_viability_hours": stored_viability_hours,
+            "is_viable": stored_viability_hours > 0,
+            "gis_available": False,
+        }
 
     if d_lat is None or d_lon is None:
         coords = get_coords_for_state(donor_state)
