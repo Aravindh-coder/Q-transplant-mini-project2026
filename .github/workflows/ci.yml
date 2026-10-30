@@ -1,0 +1,77 @@
+name: ✅ Q-Transplant v4 CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  backend:
+    name: 🏥 Backend Health Check
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 🐍 Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: 📦 Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r backend/backend/requirements.txt
+
+      - name: 🔍 Syntax check all Python files
+        run: |
+          find backend/backend/app -name "*.py" | xargs python -m py_compile
+          echo "✅ All Python files passed syntax check"
+
+      - name: 🚀 Test FastAPI app starts correctly
+        run: |
+          cd backend/backend
+          timeout 10 python -c "
+          import sys
+          sys.path.insert(0, '.')
+          from app.main import app
+          from app.database import Base, engine
+          Base.metadata.create_all(bind=engine)
+          print('✅ FastAPI app loaded successfully')
+          print('✅ Database tables created')
+          print('✅ Q-Transplant v4 — All systems operational')
+          "
+
+      - name: 🧬 Test core services import
+        run: |
+          cd backend/backend
+          python -c "
+          from app.services.gis_engine import compute_gis_adjusted_viability, haversine_km
+          from app.services.efficiency_engine import calculate_match_efficiency
+          from app.services.groq_assistant import get_organpulse_response
+
+          # Test GIS engine
+          result = compute_gis_adjusted_viability(22.5, 13.08, 80.27, 19.07, 72.87, 'Kidney', 'Tamil Nadu', 'Maharashtra')
+          assert result['distance_km'] > 0, 'GIS distance should be > 0'
+          assert result['is_viable'] in [True, False], 'GIS viability should be bool'
+          print(f'✅ GIS Engine: {result[\"distance_km\"]} km distance calculated')
+
+          # Test HLA match engine
+          donor = {'organ_type':'Kidney','blood_group':'O+','hla_a':'A2','hla_b':'B7','hla_c':None,'hla_dr':'DR4','hla_dq':None,'viability_hours_remaining':22.5,'health_status':'Optimal'}
+          recipient = {'organ_type':'Kidney','blood_group':'O+','hla_a':'A2','hla_b':'B7','hla_c':None,'hla_dr':'DR4','hla_dq':None}
+          gis_data = {'adjusted_viability_hours': 18.0, 'is_viable': True, 'gis_available': False, 'distance_km': None, 'transport_hours': None}
+          metrics = calculate_match_efficiency(donor=donor, recipient=recipient, gis_data=gis_data, urgency_level='HIGH', pra_percentage=0.0)
+          assert metrics['is_compatible'] == True, 'O+ to O+ should be compatible'
+          assert metrics['blood_match'] == True, 'Blood match should be True'
+          print(f'✅ HLA Match Engine: Score={metrics[\"efficiency_score\"]}%, Compatible={metrics[\"is_compatible\"]}')
+
+          # Test OrganPulse AI fallback
+          response = get_organpulse_response('What is Q-Transplant?')
+          assert len(response) > 10, 'OrganPulse should return a response'
+          print(f'✅ OrganPulse AI: Fallback engine working')
+
+          print()
+          print('🏥 Q-Transplant v4 — All core services verified!')
+          "
