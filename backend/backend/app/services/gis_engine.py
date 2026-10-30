@@ -96,6 +96,10 @@ def compute_gis_adjusted_viability(
             "gis_available": False,
         }
 
+    # Resolve coordinates from parameters
+    d_lat, d_lon = donor_lat, donor_lon
+    r_lat, r_lon = recipient_lat, recipient_lon
+
     if d_lat is None or d_lon is None:
         coords = get_coords_for_state(donor_state)
         if coords:
@@ -105,6 +109,7 @@ def compute_gis_adjusted_viability(
         coords = get_coords_for_state(recipient_state)
         if coords:
             r_lat, r_lon = coords
+
 
     # If still no coords, return stored viability unchanged
     if None in (d_lat, d_lon, r_lat, r_lon):
